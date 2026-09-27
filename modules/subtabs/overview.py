@@ -190,9 +190,9 @@ class EventInspectorDialog(QDialog):
             self.raw_text.setPlainText("No extended database record available for this event.")
             return
             
-        table_name, record_id = db_info
+        table_name, record_id, db_path = db_info
         try:
-            conn = sqlite3.connect("nexashield.db")
+            conn = sqlite3.connect(db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
             cursor.execute(f"SELECT * FROM {table_name} WHERE id = ?", (record_id,))
@@ -216,9 +216,10 @@ class OverviewWorker(QThread):
     """Background worker to fetch telemetry without freezing the GUI."""
     data_fetched = pyqtSignal(dict)
 
-    def __init__(self, fetch_db=False):
+    def __init__(self, fetch_db=False, db_path="nexashield.db"):
         super().__init__()
         self.fetch_db = fetch_db
+        self.db_path = db_path
 
     def run(self):
         data = {}
@@ -249,7 +250,7 @@ class OverviewWorker(QThread):
         events = []
         if self.fetch_db:
             try:
-                conn = sqlite3.connect("nexashield.db")
+                conn = sqlite3.connect(self.db_path)
                 cursor = conn.cursor()
                 
                 # Check existing tables to prevent failure on fresh installs
@@ -265,11 +266,10 @@ class OverviewWorker(QThread):
                     queries.append("SELECT id, timestamp, source, description, severity, 'siem_events' as table_name FROM siem_events")
                     
                 if queries:
-                    # Push sorting and pagination directly to the SQLite C-engine for peak performance
                     full_query = " UNION ALL ".join(queries) + " ORDER BY timestamp DESC LIMIT 50"
                     cursor.execute(full_query)
                     for row in cursor.fetchall():
-                        events.append((row[1], row[2], row[3], row[4], (row[5], row[0])))
+                        events.append((row[1], row[2], row[3], row[4], (row[5], row[0], self.db_path)))
                         
                 conn.close()
             except Exception:
@@ -393,8 +393,9 @@ class OverviewBarChart(QWidget):
         painter.drawPath(stroke_path)
 
 class OverviewWidget(QWidget):
-    def __init__(self):
+    def __init__(self, session_manager=None):
         super().__init__()
+        self.session = session_manager
         self._tick_count = 0
         self._last_events = None
         self.setup_ui()
@@ -592,7 +593,8 @@ class OverviewWidget(QWidget):
             return
             
         fetch_db = (self._tick_count % 3 == 0)
-        self.worker = OverviewWorker(fetch_db)
+        db_path = self.session.get_db_path() if self.session else "nexashield.db"
+        self.worker = OverviewWorker(fetch_db, db_path)
         self.worker.data_fetched.connect(self.handle_dashboard_data)
         self.worker.start()
         self._tick_count += 1
@@ -809,7 +811,7 @@ class OverviewWidget(QWidget):
             reply = QMessageBox.question(self, "Clear All Logs", "No rows selected. Do you want to clear ALL logs?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
             if reply == QMessageBox.StandardButton.Yes:
                 try:
-                    conn = sqlite3.connect("nexashield.db")
+                    conn = sqlite3.connect(self.session.get_db_path() if self.session else "nexashield.db")
                     cursor = conn.cursor()
                     # Ignore missing tables gracefully 
                     for table in ["siem_events", "phishing_history", "scan_history"]:
@@ -831,7 +833,7 @@ class OverviewWidget(QWidget):
         
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                conn = sqlite3.connect("nexashield.db")
+                conn = sqlite3.connect(self.session.get_db_path() if self.session else "nexashield.db")
                 cursor = conn.cursor()
                 for r in rows_to_delete:
                     item = self.alerts_table.item(r, 0)
@@ -916,7 +918,7 @@ class OverviewWidget(QWidget):
             QMessageBox.information(self, "Success", f"Successfully blocked IP {ip} at OS Firewall.")
             
             # Audit Trail
-            conn = sqlite3.connect("nexashield.db")
+            conn = sqlite3.connect(self.session.get_db_path() if self.session else "nexashield.db")
             conn.cursor().execute("INSERT INTO siem_events (timestamp, source, description, severity) VALUES (?, ?, ?, ?)",
                            (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "SIEM / IPS", f"Manually blocked IP via context menu: {ip}", "High"))
             conn.commit()

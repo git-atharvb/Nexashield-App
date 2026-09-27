@@ -5,7 +5,7 @@ from ui_components import AuthStyle, PasswordInput, GlowingLogo
 
 class SignupWindow(AuthStyle):
     switch_to_login = pyqtSignal()
-    signup_success = pyqtSignal(str)
+    signup_success = pyqtSignal(str, str, str)
 
     def __init__(self, db):
         super().__init__()
@@ -117,6 +117,6 @@ class SignupWindow(AuthStyle):
 
         if self.db.register_user(username, password, phone, address):
             QMessageBox.information(self, "Success", "Account created! Logging you in...")
-            self.signup_success.emit(username)
+            self.signup_success.emit(username, "local", "")
         else:
             QMessageBox.warning(self, "Error", "Username already exists")

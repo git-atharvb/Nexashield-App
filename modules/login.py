@@ -102,7 +102,7 @@ class LoadingSpinner(QWidget):
 class LoginWindow(AuthStyle):
     switch_to_signup = pyqtSignal()
     switch_to_forgot = pyqtSignal()
-    login_success = pyqtSignal(str)
+    login_success = pyqtSignal(str, str, str) # username, auth_type, auth_token
 
     def __init__(self, db):
         super().__init__()
@@ -172,7 +172,7 @@ class LoginWindow(AuthStyle):
         if self.db.verify_user(username, password):
             dlg = LoginSuccessDialog(self, username)
             dlg.exec()
-            self.login_success.emit(username)
+            self.login_success.emit(username, "local", "")
         else:
             QMessageBox.warning(self, "Error", "Invalid username or password")
 
@@ -227,10 +227,11 @@ class LoginWindow(AuthStyle):
 
     def on_google_success(self, user_info):
         email = user_info.get('email', 'Google User')
+        access_token = user_info.get('access_token', '')
         # Here you could register the user in your DB if they don't exist
         dlg = LoginSuccessDialog(self, email)
         dlg.exec()
-        self.login_success.emit(email)
+        self.login_success.emit(email, "google", access_token)
         self.login_btn.setEnabled(True)
         self.google_btn.setText(" Sign in with Google")
 

@@ -354,8 +354,9 @@ class PhishingStatsChart(QWidget):
         super().mouseMoveEvent(event)
 
 class PhishingDetectorWidget(QWidget):
-    def __init__(self):
+    def __init__(self, session_manager=None):
         super().__init__()
+        self.session = session_manager
         self.setObjectName("PhishingDetector")
         self.init_db()
         self.setup_ui()
@@ -363,7 +364,8 @@ class PhishingDetectorWidget(QWidget):
     def init_db(self):
         """Initialize the history table."""
         try:
-            self.conn = sqlite3.connect(DB_NAME)
+            db_path = self.session.get_db_path() if self.session else DB_NAME
+            self.conn = sqlite3.connect(db_path)
             cursor = self.conn.cursor()
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS phishing_history (
@@ -670,14 +672,17 @@ class PhishingDetectorWidget(QWidget):
                 QMessageBox.warning(self, "Error", str(e))
 
     def export_history(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export History", "phishing_history.pdf", "PDF Files (*.pdf)")
-        if not path:
-            return
-
+        import tempfile
+        import os
+        
         try:
+            # Create a temporary unencrypted PDF
+            temp_fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+            os.close(temp_fd)
+            
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-            printer.setOutputFileName(path)
+            printer.setOutputFileName(temp_path)
 
             cursor = self.conn.cursor()
             cursor.execute("SELECT timestamp, url, threat_level, score, details, reasons FROM phishing_history ORDER BY id DESC")
@@ -717,6 +722,23 @@ class PhishingDetectorWidget(QWidget):
             doc = QTextDocument()
             doc.setHtml(html)
             doc.print(printer)
-            QMessageBox.information(self, "Success", "History exported successfully.")
+            
+            # Read back bytes and pipe into Secure Vault FMS
+            with open(temp_path, "rb") as f:
+                pdf_bytes = f.read()
+            os.remove(temp_path)
+            
+            if self.session and hasattr(self.session, 'file_manager'):
+                self.session.file_manager.export_file(
+                    filename="phishing_history.pdf", 
+                    content=pdf_bytes, 
+                    module_source="Phishing Detector", 
+                    file_type="PDF", 
+                    tags="Warning"
+                )
+                QMessageBox.information(self, "Vaulted", "Phishing History PDF securely vaulted in FMS.")
+            else:
+                QMessageBox.warning(self, "Warning", "FMS not available, file not saved.")
+                
         except Exception as e:
             QMessageBox.critical(self, "Export Error", str(e))

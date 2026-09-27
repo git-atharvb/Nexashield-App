@@ -270,7 +270,8 @@ class PacketDetailsDialog(QDialog):
             
         success, msg = block_ip_os(ip)
         if success:
-            DatabaseManager().log_siem_event("NIDS / IPS", f"Manually blocked IP: {ip}", "High")
+            db_path = self.parent_widget.session.get_db_path() if hasattr(self.parent_widget, 'session') and self.parent_widget.session else "nexashield.db"
+            DatabaseManager(db_path).log_siem_event("NIDS / IPS", f"Manually blocked IP: {ip}", "High")
             QMessageBox.information(self, "IP Blocked", f"Successfully blocked {ip} at OS Firewall.")
             self.block_btn.setEnabled(False)
             self.block_btn.setText("Blocked")
@@ -508,8 +509,9 @@ class SnifferWorker(QThread):
         self.is_running = False
 
 class NIDSWidget(QWidget):
-    def __init__(self):
+    def __init__(self, session_manager=None):
         super().__init__()
+        self.session = session_manager
         self.setObjectName("NIDSMonitor")
         self.worker = None
         self.packet_queue = []
@@ -747,12 +749,10 @@ class NIDSWidget(QWidget):
             dlg.exec()
             
     def export_pcap(self):
+        import tempfile
+        import os
         if self.table.rowCount() == 0:
             QMessageBox.warning(self, "Export Error", "No packets to export.")
-            return
-            
-        path, _ = QFileDialog.getSaveFileName(self, "Export PCAP", "capture.pcap", "PCAP Files (*.pcap)")
-        if not path:
             return
             
         try:
@@ -762,10 +762,33 @@ class NIDSWidget(QWidget):
                 data = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
                 if data and "raw_packet" in data and data["raw_packet"] is not None:
                     packets.append(data["raw_packet"])
-            wrpcap(path, packets)
-            QMessageBox.information(self, "Success", f"Exported {len(packets)} packets to {path}")
+                    
+            if not packets:
+                QMessageBox.warning(self, "Export Error", "No raw packets available to export.")
+                return
+                
+            temp_fd, temp_path = tempfile.mkstemp(suffix=".pcap")
+            os.close(temp_fd)
+            
+            wrpcap(temp_path, packets)
+            
+            with open(temp_path, "rb") as f:
+                pcap_bytes = f.read()
+            os.remove(temp_path)
+            
+            if self.session and hasattr(self.session, 'file_manager'):
+                self.session.file_manager.export_file(
+                    filename="capture.pcap",
+                    content=pcap_bytes,
+                    module_source="NIDS",
+                    file_type="PCAP",
+                    tags="Critical"
+                )
+                QMessageBox.information(self, "Vaulted", f"Successfully vaulted {len(packets)} packets into FMS.")
+            else:
+                QMessageBox.warning(self, "Warning", "FMS not available.")
         except Exception as e:
-            QMessageBox.critical(self, "Export Error", f"Failed to save PCAP:\n{str(e)}")
+            QMessageBox.critical(self, "Export Error", f"Failed to vault PCAP:\n{str(e)}")
 
     def log_packet(self, data):
         self.packet_queue.append(data)
@@ -798,7 +821,8 @@ class NIDSWidget(QWidget):
                     if src_ip and src_ip not in ("Unknown", "System") and src_ip not in self.blocked_ips:
                         success, _ = block_ip_os(src_ip)
                         if success:
-                            DatabaseManager().log_siem_event("NIDS / IPS", f"Auto-blocked high-risk IP: {src_ip}", "Critical")
+                            db_path = self.session.get_db_path() if self.session else "nexashield.db"
+                            DatabaseManager(db_path).log_siem_event("NIDS / IPS", f"Auto-blocked high-risk IP: {src_ip}", "Critical")
                             self.blocked_ips.add(src_ip)
                             self.blocked_ips_info[src_ip] = {
                                 "reason": data.get("info", "Auto-blocked by IPS"),

@@ -66,11 +66,15 @@ class FileDetailsDialog(QDialog):
         layout.addWidget(close_btn)
 
 class AntivirusWidget(QWidget):
-    def __init__(self):
+    def __init__(self, session_manager=None):
         super().__init__()
-        self.db = DatabaseManager()
-        self.quarantine_log_file = "quarantine_log.json"
-        self.schedule_file = "scan_schedule.json"
+        self.session = session_manager
+        db_path = self.session.get_db_path() if self.session else "nexashield.db"
+        self.db = DatabaseManager(db_path)
+        
+        workspace = self.session.workspace_dir if self.session else "."
+        self.quarantine_log_file = os.path.join(workspace, "quarantine_log.json")
+        self.schedule_file = os.path.join(workspace, "scan_schedule.json")
         self.setAcceptDrops(True) # Enable Drag & Drop
         self.setup_ui()
         self.observer = None
@@ -402,17 +406,18 @@ class AntivirusWidget(QWidget):
             QMessageBox.information(self, "Clean", "Hash not found in signature database.")
 
     def export_table_to_pdf(self, table, title, default_filename):
+        import tempfile
+        import os
         if not PDF_SUPPORT:
             QMessageBox.warning(self, "Error", "PDF Export not supported (QtPrintSupport missing).")
             return
             
-        filename, _ = QFileDialog.getSaveFileName(self, "Export Report", default_filename, "PDF Files (*.pdf)")
-        if not filename:
-            return
+        temp_fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+        os.close(temp_fd)
             
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-        printer.setOutputFileName(filename)
+        printer.setOutputFileName(temp_path)
         
         doc = QTextDocument()
         
@@ -459,7 +464,22 @@ class AntivirusWidget(QWidget):
         
         doc.setHtml(html)
         doc.print(printer)
-        QMessageBox.information(self, "Success", f"Report saved to {filename}")
+        
+        with open(temp_path, "rb") as f:
+            pdf_bytes = f.read()
+        os.remove(temp_path)
+        
+        if self.session and hasattr(self.session, 'file_manager'):
+            self.session.file_manager.export_file(
+                filename=default_filename,
+                content=pdf_bytes,
+                module_source="Antivirus",
+                file_type="PDF",
+                tags="Critical" if "Quarantine" in title else "Routine"
+            )
+            QMessageBox.information(self, "Vaulted", "Antivirus report securely vaulted in FMS.")
+        else:
+            QMessageBox.warning(self, "Warning", "FMS not available, file not saved.")
 
     def show_file_details(self, row, column):
         file_path = self.results_table.item(row, 0).text()
@@ -504,7 +524,8 @@ class AntivirusWidget(QWidget):
 
     def update_definitions(self):
         self.status_label.setText("Status: Updating Virus Definitions...")
-        self.update_worker = UpdateDefinitionsWorker()
+        db_path = self.session.get_db_path() if self.session else "nexashield.db"
+        self.update_worker = UpdateDefinitionsWorker(db_path)
         self.update_worker.finished.connect(self.on_update_finished)
         self.update_worker.start()
 
@@ -617,8 +638,9 @@ class AntivirusWidget(QWidget):
         self.pause_btn.setText("Pause")
         self.stop_btn.setEnabled(True)
         self.manual_stop = False
-
-        self.scan_thread = ScanWorker(paths, scan_type)
+        
+        db_path = self.session.get_db_path() if self.session else "nexashield.db"
+        self.scan_thread = ScanWorker(paths, scan_type, db_path)
         self.scan_thread.progress_updated.connect(self.update_progress)
         self.scan_thread.threat_found.connect(self.add_threat_row)
         self.scan_thread.scan_finished.connect(self.scan_finished)

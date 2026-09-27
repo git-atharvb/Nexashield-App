@@ -14,8 +14,9 @@ from subtabs.help import HelpWidget
 from subtabs.contact import ContactWidget
 
 class SIEMDashboard(QWidget):
-    def __init__(self):
+    def __init__(self, session_manager=None):
         super().__init__()
+        self.session = session_manager
         self.setup_ui()
 
     def setup_ui(self):
@@ -63,8 +64,8 @@ class SIEMDashboard(QWidget):
         self.content_area = QStackedWidget()
         
         # Add sub-modules
-        self.content_area.addWidget(OverviewWidget())
-        self.content_area.addWidget(FilesWidget())
+        self.content_area.addWidget(OverviewWidget(self.session))
+        self.content_area.addWidget(FilesWidget(self.session))
         self.content_area.addWidget(SettingsWidget())
         self.content_area.addWidget(AboutWidget())
         self.content_area.addWidget(HelpWidget())

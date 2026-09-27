@@ -75,15 +75,24 @@ class GoogleAuthWorker(QThread):
                 f"https://accounts.google.com/o/oauth2/auth?"
                 f"response_type=code&client_id={self.client_id}&"
                 f"redirect_uri={self.redirect_uri}&"
-                f"scope=openid%20email%20profile"
+                f"scope=openid%20email%20profile%20https://www.googleapis.com/auth/drive.readonly"
             )
 
             # 3. Open System Browser
             webbrowser.open(auth_url)
 
-            # 4. Wait for the callback (handle requests until we get the code or error)
-            while not server.auth_code and not server.auth_error:
+            server.timeout = 1.0  # 1 second timeout
+            timeout_counter = 0
+            max_timeout = 90  # Wait up to 90 seconds
+
+            while not server.auth_code and not server.auth_error and timeout_counter < max_timeout:
                 server.handle_request()
+                timeout_counter += 1
+
+            if not server.auth_code and not server.auth_error:
+                self.auth_error.emit("Authentication timed out or was cancelled by closing the browser.")
+                server.server_close()
+                return
 
             if server.auth_error:
                 self.auth_error.emit(f"Authentication Error: {server.auth_error}")
@@ -108,7 +117,9 @@ class GoogleAuthWorker(QThread):
                     "https://www.googleapis.com/oauth2/v1/userinfo",
                     headers={'Authorization': f"Bearer {tokens['access_token']}"}
                 )
-                self.auth_success.emit(user_info_resp.json())
+                user_info = user_info_resp.json()
+                user_info['access_token'] = tokens['access_token']
+                self.auth_success.emit(user_info)
             else:
                 self.auth_error.emit(f"Failed to retrieve access token: {tokens.get('error', 'Unknown error')}")
 

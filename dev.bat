@@ -1,0 +1,1 @@
+C:\Users\Atharva\AppData\Roaming\uv\python\cpython-3.14.7-windows-x86_64-none\Scripts\watchmedo.exe auto-restart --patterns="*.py" --recursive -- C:\Users\Atharva\AppData\Roaming\uv\python\cpython-3.14.7-windows-x86_64-none\python.exe modules/main.py

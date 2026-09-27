@@ -200,8 +200,9 @@ class ResourceChart(QFrame):
         painter.drawText(15, 28, f"{self.title}: {self.current_value:.1f}%")
 
 class ProcessMonitorWidget(QWidget):
-    def __init__(self):
+    def __init__(self, session_manager=None):
         super().__init__()
+        self.session = session_manager
         self.setObjectName("ProcessMonitor")
         
         # State
@@ -910,7 +911,8 @@ class ProcessMonitorWidget(QWidget):
                     p = psutil.Process(pid)
                     p_name = p.name()
                     p.terminate()
-                    DatabaseManager().log_siem_event("Process Monitor", f"Terminated process '{p_name}' (PID: {pid})", "Warning")
+                    db_path = self.session.get_db_path() if self.session else "nexashield.db"
+                    DatabaseManager(db_path).log_siem_event("Process Monitor", f"Terminated process '{p_name}' (PID: {pid})", "Warning")
                 except psutil.AccessDenied:
                     errors.append(f"PID {pid}: Access Denied")
                 except Exception as e:
@@ -943,46 +945,57 @@ class ProcessMonitorWidget(QWidget):
         self.refresh_data()
 
     def export_csv(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export Processes", "processes.csv", "CSV Files (*.csv)")
-        if path:
-            try:
-                with open(path, 'w', newline='') as f:
-                    writer = csv.writer(f)
-                    writer.writerow(["PID", "Name", "Status", "CPU%", "Mem%", "User", "Created"])
-                    for p in self.process_data:
-                        writer.writerow([
-                            p['pid'], p['name'], p['status'], 
-                            p['cpu_percent'], p['memory_percent'], 
-                            p['username'], p['create_time']
-                        ])
-                QMessageBox.information(self, "Export", "Process list exported successfully.")
-            except Exception as e:
-                QMessageBox.critical(self, "Export Error", str(e))
+        import io
+        try:
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["PID", "Name", "Status", "CPU%", "Mem%", "User", "Created"])
+            for p in self.process_data:
+                writer.writerow([
+                    p['pid'], p['name'], p['status'], 
+                    p['cpu_percent'], p['memory_percent'], 
+                    p['username'], p['create_time']
+                ])
+                
+            if self.session and hasattr(self.session, 'file_manager'):
+                self.session.file_manager.export_file(
+                    filename="processes.csv",
+                    content=output.getvalue(),
+                    module_source="Process Monitor",
+                    file_type="CSV",
+                    tags="Routine"
+                )
+                QMessageBox.information(self, "Vaulted", "Process list CSV securely vaulted in FMS.")
+            else:
+                QMessageBox.warning(self, "Warning", "FMS not available.")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", str(e))
 
     def export_pdf(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export Processes", "processes.pdf", "PDF Files (*.pdf)")
-        if not path:
-            return
-            
+        import tempfile
+        import os
         try:
+            temp_fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+            os.close(temp_fd)
+            
             printer = QPrinter(QPrinter.PrinterMode.HighResolution)
             printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-            printer.setOutputFileName(path)
+            printer.setOutputFileName(temp_path)
             
             # Build HTML Table
-            html = """
+            html = f"""
             <html>
             <head>
                 <style>
-                    h1 { text-align: center; font-family: Arial, sans-serif; }
-                    table { border-collapse: collapse; width: 100%; font-family: Arial, sans-serif; font-size: 10pt; }
-                    th, td { border: 1px solid #333; padding: 4px; text-align: left; }
-                    th { background-color: #f2f2f2; font-weight: bold; }
+                    h1 {{ text-align: center; font-family: Arial, sans-serif; }}
+                    table {{ border-collapse: collapse; width: 100%; font-family: Arial, sans-serif; font-size: 10pt; }}
+                    th, td {{ border: 1px solid #333; padding: 4px; text-align: left; }}
+                    th {{ background-color: #f2f2f2; font-weight: bold; }}
                 </style>
             </head>
             <body>
                 <h1>System Processes Report</h1>
-                <p>Generated: %s</p>
+                <p>Generated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
                 <table>
                     <thead>
                         <tr>
@@ -990,7 +1003,7 @@ class ProcessMonitorWidget(QWidget):
                         </tr>
                     </thead>
                     <tbody>
-            """ % datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            """
 
             for p in self.process_data:
                 try:
@@ -1012,7 +1025,22 @@ class ProcessMonitorWidget(QWidget):
             doc = QTextDocument()
             doc.setHtml(html)
             doc.print(printer)
-            QMessageBox.information(self, "Export", "PDF exported successfully.")
+            
+            with open(temp_path, "rb") as f:
+                pdf_bytes = f.read()
+            os.remove(temp_path)
+            
+            if self.session and hasattr(self.session, 'file_manager'):
+                self.session.file_manager.export_file(
+                    filename="processes.pdf",
+                    content=pdf_bytes,
+                    module_source="Process Monitor",
+                    file_type="PDF",
+                    tags="Routine"
+                )
+                QMessageBox.information(self, "Vaulted", "Process list PDF securely vaulted in FMS.")
+            else:
+                QMessageBox.warning(self, "Warning", "FMS not available.")
             
         except Exception as e:
             QMessageBox.critical(self, "Export Error", str(e))

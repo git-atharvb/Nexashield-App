@@ -298,8 +298,9 @@ class ProtocolPieChart(QWidget):
         super().mouseMoveEvent(event)
 
 class NetworkMonitorWidget(QWidget):
-    def __init__(self):
+    def __init__(self, session_manager=None):
         super().__init__()
+        self.session = session_manager
         self.setObjectName("NetworkMonitor")
         
         # State

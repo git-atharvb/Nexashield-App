@@ -25,10 +25,11 @@ class ScanWorker(QThread):
     threat_found = pyqtSignal(dict)         # threat details
     scan_finished = pyqtSignal(int, int)    # total files, threats found
 
-    def __init__(self, paths, scan_type):
+    def __init__(self, paths, scan_type, db_path="nexashield.db"):
         super().__init__()
         self.paths = paths
         self.scan_type = scan_type
+        self.db_path = db_path
         self.is_running = True
         self.is_paused = False
         self.mutex = QMutex()
@@ -54,7 +55,7 @@ class ScanWorker(QThread):
 
     def run(self):
         # Create a thread-local database connection to avoid SQLite threading errors
-        self.db = DatabaseManager()
+        self.db = DatabaseManager(self.db_path)
         self.start_time = time.time()
         
         if self.scan_type == "Full":
@@ -206,6 +207,10 @@ class UpdateDefinitionsWorker(QThread):
     """Background thread for updating virus definitions."""
     finished = pyqtSignal(bool, str)
 
+    def __init__(self, db_path="nexashield.db"):
+        super().__init__()
+        self.db_path = db_path
+
     def run(self):
         try:
             # Simulating network delay and update
@@ -218,7 +223,7 @@ class UpdateDefinitionsWorker(QThread):
                 ("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "Empty-Test", "Suspicious", "Low")
             ]
             
-            db = DatabaseManager()
+            db = DatabaseManager(self.db_path)
             added = 0
             for sig in new_sigs:
                 # Check if hash exists

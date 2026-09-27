@@ -26,3 +26,6 @@ If you need to generate a new dataset and retrain the Random Forest model for th
 python modules/ai/processAI/train_process_model.py
 ```
 *(This will regenerate the `process_threat_model.pkl` and `process_threat_features.pkl` files).*
+
+HOT RELOAD FOR DEVELOPMENT
+.\dev.bat

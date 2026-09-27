@@ -9,6 +9,7 @@ from login import LoginWindow
 from signup import SignupWindow
 from forgot_password import ForgotPasswordWindow
 from home import HomeWindow
+from session_manager import SessionManager
 
 # MAIN APPLICATION CONTROLLER
 
@@ -36,13 +37,14 @@ class NexaShieldApp(QMainWindow):
         self.login_screen = LoginWindow(self.db)
         self.signup_screen = SignupWindow(self.db)
         self.forgot_screen = ForgotPasswordWindow(self.db)
-        self.home_screen = HomeWindow()
+        
+        # Home screen will be dynamically instantiated on login for isolated sessions
+        self.home_screen = None
 
         # Add screens to stack
         self.stack.addWidget(self.login_screen)  # Index 0
         self.stack.addWidget(self.signup_screen) # Index 1
         self.stack.addWidget(self.forgot_screen) # Index 2
-        self.stack.addWidget(self.home_screen)   # Index 3
 
         # Connect Signals
         self.login_screen.switch_to_signup.connect(lambda: self.stack.setCurrentIndex(1))
@@ -53,13 +55,10 @@ class NexaShieldApp(QMainWindow):
         self.signup_screen.signup_success.connect(self.show_home)
 
         self.forgot_screen.switch_to_login.connect(lambda: self.stack.setCurrentIndex(0))
-        self.home_screen.logout_requested.connect(self.handle_logout)
-
         # Theme Toggles
         self.login_screen.theme_toggle.clicked.connect(self.toggle_theme)
         self.signup_screen.theme_toggle.clicked.connect(self.toggle_theme)
         self.forgot_screen.theme_toggle.clicked.connect(self.toggle_theme)
-        self.home_screen.theme_toggle.clicked.connect(self.toggle_theme)
 
         self.apply_theme()
 
@@ -72,10 +71,30 @@ class NexaShieldApp(QMainWindow):
         y = screen.y() + (screen.height() - h) // 2
         self.setGeometry(x, y, w, h)
 
-    def show_home(self, username):
+    def show_home(self, username, auth_type="local", auth_token=""):
+        # 1. Create the user's isolated workspace with auth context
+        self.session_manager = SessionManager(username, auth_type, auth_token)
+        
+        # 2. Destroy the old home screen to wipe all data/threads from RAM
+        if self.home_screen is not None:
+            self.stack.removeWidget(self.home_screen)
+            self.home_screen.deleteLater()
+            
+        # 3. Instantiate a fresh, isolated home screen
+        self.home_screen = HomeWindow(self.session_manager)
+        
+        # 4. Reconnect dynamic signals
+        self.home_screen.logout_requested.connect(self.handle_logout)
+        self.home_screen.theme_toggle.clicked.connect(self.toggle_theme)
+        self.home_screen.theme_toggle.setText("☀️" if self.is_dark_mode else "🌙")
+        
+        # 5. Add to stack and show
+        self.stack.addWidget(self.home_screen) # Automatically appends at end
+        
         self.setWindowTitle(f"NexaShield Cybersecurity Suite : Welcome {username}")
-        self.stack.setCurrentIndex(3)
+        self.stack.setCurrentWidget(self.home_screen)
         self.showMaximized()
+        self.apply_theme()
 
     def handle_logout(self):
         self.setWindowTitle("NexaShield Cybersecurity Suite")
@@ -93,7 +112,8 @@ class NexaShieldApp(QMainWindow):
         self.login_screen.theme_toggle.setText(icon)
         self.signup_screen.theme_toggle.setText(icon)
         self.forgot_screen.theme_toggle.setText(icon)
-        self.home_screen.theme_toggle.setText(icon)
+        if self.home_screen:
+            self.home_screen.theme_toggle.setText(icon)
         
         self.apply_theme()
 

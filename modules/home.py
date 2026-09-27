@@ -11,6 +11,7 @@ from tabs.antivirus import AntivirusWidget
 from tabs.memory import MemoryMonitorWidget
 from tabs.cloud import CloudSecurityWidget
 from tabs.nids import NIDSWidget
+from tabs.firewall import FirewallWidget
 
 class LogoutSuccessDialog(QDialog):
     """A custom, modern dialog for successful logout."""
@@ -111,8 +112,9 @@ class RefreshToastDialog(QDialog):
 class HomeWindow(QMainWindow):
     logout_requested = pyqtSignal()
 
-    def __init__(self):
+    def __init__(self, session_manager=None):
         super().__init__()
+        self.session = session_manager
         
         # Main Layout
         central_widget = QWidget()
@@ -187,16 +189,16 @@ class HomeWindow(QMainWindow):
         self.content_area = QStackedWidget()
         self.layout.addWidget(self.content_area)
 
-        # Pre-load all modules to ensure instantaneous tab switching without lag
-        self.content_area.addWidget(SIEMDashboard())
-        self.content_area.addWidget(ProcessMonitorWidget())
-        self.content_area.addWidget(NetworkMonitorWidget())
-        self.content_area.addWidget(MemoryMonitorWidget())
-        self.content_area.addWidget(PhishingDetectorWidget())
-        self.content_area.addWidget(NIDSWidget())
-        self.content_area.addWidget(self.create_placeholder("Firewall"))
-        self.content_area.addWidget(AntivirusWidget())
-        self.content_area.addWidget(CloudSecurityWidget())
+        # Inject SessionManager into all modules
+        self.content_area.addWidget(SIEMDashboard(self.session))
+        self.content_area.addWidget(ProcessMonitorWidget(self.session))
+        self.content_area.addWidget(NetworkMonitorWidget(self.session))
+        self.content_area.addWidget(MemoryMonitorWidget(self.session))
+        self.content_area.addWidget(PhishingDetectorWidget(self.session))
+        self.content_area.addWidget(NIDSWidget(self.session))
+        self.content_area.addWidget(FirewallWidget(self.session))
+        self.content_area.addWidget(AntivirusWidget(self.session))
+        self.content_area.addWidget(CloudSecurityWidget(self.session))
 
         # Set default selection
         self.switch_tab(0)
@@ -218,6 +220,8 @@ class HomeWindow(QMainWindow):
             current_widget.refresh_data()
         elif hasattr(current_widget, "update_all_stats"):
             current_widget.update_all_stats()
+        elif hasattr(current_widget, "load_rules"):
+            current_widget.load_rules()
             
         # Show Toast Notification
         self._toast = RefreshToastDialog(self)

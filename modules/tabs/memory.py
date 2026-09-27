@@ -520,8 +520,9 @@ class MemoryMonitorWidget(QWidget):
     HIGH_RAM_THRESHOLD = 90.0
     HIGH_DISK_THRESHOLD = 95.0
 
-    def __init__(self, parent=None):
+    def __init__(self, session_manager=None, parent=None):
         super().__init__(parent)
+        self.session = session_manager
         self.setObjectName("MemoryMonitorWidget")
 
         # --- Data State ---
@@ -818,12 +819,14 @@ class MemoryMonitorWidget(QWidget):
         QMessageBox.information(self, "Done", f"Deleted {count} files.\nFreed {self._fmt(freed)}.")
 
     def export_pdf(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export", "MemoryReport.pdf", "PDF (*.pdf)")
-        if not path: return
+        import tempfile
+        import os
+        temp_fd, temp_path = tempfile.mkstemp(suffix=".pdf")
+        os.close(temp_fd)
         
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-        printer.setOutputFileName(path)
+        printer.setOutputFileName(temp_path)
         
         # Helper to grab widget as base64 image
         def grab(w):
@@ -949,7 +952,22 @@ class MemoryMonitorWidget(QWidget):
         doc = QTextDocument()
         doc.setHtml(html)
         doc.print(printer)
-        QMessageBox.information(self, "Success", "Report exported successfully.")
+        
+        with open(temp_path, "rb") as f:
+            pdf_bytes = f.read()
+        os.remove(temp_path)
+        
+        if self.session and hasattr(self.session, 'file_manager'):
+            self.session.file_manager.export_file(
+                filename="MemoryReport.pdf",
+                content=pdf_bytes,
+                module_source="Memory Monitor",
+                file_type="PDF",
+                tags="Routine"
+            )
+            QMessageBox.information(self, "Vaulted", "Memory Report PDF securely vaulted in FMS.")
+        else:
+            QMessageBox.warning(self, "Warning", "FMS not available.")
 
     def _toggle_auto(self, state):
         if state:
