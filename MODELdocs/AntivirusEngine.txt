@@ -1,0 +1,43 @@
+# NexaShield Antivirus Engine - Deep Technical Evaluation
+
+## 1. Executive Summary & Operational Goals
+The Antivirus Engine (`antivirus_logic.py`) is the workhorse of the NexaShield platform. It is responsible for orchestrating file-system traversal, I/O streaming, threat evaluation, and thread management. The core design philosophy prioritizes memory safety and GUI responsiveness—ensuring that a user can run a full terabyte disk scan without locking the application or crashing due to RAM exhaustion.
+
+## 2. Deep Dive: The `ScanWorker` Architecture
+The scanning process is offloaded from the main PyQt6 event loop to a dedicated `QThread` (`ScanWorker`).
+
+### 2.1 Thread Safety & State Management
+- **QMutex and QWaitCondition:** The engine implements a highly efficient Pause/Resume mechanic. Instead of using a CPU-burning `while is_paused: time.sleep(0.1)` loop, it uses `self.condition.wait(self.mutex)`. When paused, the thread goes into a deep sleep state, consuming exactly 0% CPU while preserving its current place in the `os.walk` directory tree. Calling `self.condition.wakeAll()` instantly resumes execution.
+- **SQLite Thread-Locality:** SQLite cannot share connections across threads safely. To prevent `ProgrammingError: SQLite objects created in a thread can only be used in that same thread`, the `ScanWorker` initializes its own distinct `DatabaseManager(self.db_path)` connection inside the `run()` method rather than in `__init__()`.
+
+### 2.2 Event Loop Throttling
+During a fast scan, a modern NVMe drive can evaluate thousands of small files per second. If the background thread emitted a `progress_updated` signal for every single file, the PyQt6 event queue would flood, causing the GUI to entirely freeze.
+- **The Throttle Implementation:** The engine uses a timestamp delta check (`current_time - self.last_emit_time > 0.1`). It strictly limits UI signal emissions to a maximum of 10 times per second, ensuring butter-smooth GUI updates regardless of disk speed.
+
+## 3. Deep Dive: Progress and ETA Heuristics
+Calculating accurate ETAs for recursive directory scans is notoriously difficult. The engine dynamically switches strategies based on the scan type:
+
+### 3.1 Full System Scans (Byte-Based)
+- **Problem:** Running `os.walk` on `C:\` just to count the total files before scanning would take 5+ minutes, delaying the scan start.
+- **Solution:** The engine utilizes `shutil.disk_usage(path).used` to instantly grab the total occupied byte-space of the drive. As files are scanned, their size is aggregated (`self.scanned_bytes`). 
+- **ETA Math:** Progress is strictly `(scanned_bytes / total_bytes) * 100`. The ETA calculates the rolling byte-per-second processing rate (`rate = scanned_bytes / elapsed_time`) to estimate completion.
+
+### 3.2 Quick & Custom Scans (File-Count Based)
+For smaller targeted directories, a fast preliminary `os.walk` compiles a list of total files. Progress is then tracked natively as `scanned_count / total_files`.
+
+## 4. Threat Identification Mechanics (`scan_file`)
+The engine utilizes a hybrid pipeline for every file:
+
+### 4.1 Memory-Safe Hashing (Signature Match)
+To evaluate files against the signature database, the engine computes a SHA-256 hash. 
+- **RAM Protection:** Loading a 10GB `.iso` file into memory via `f.read()` would crash the app. The engine uses an iterator with a 64KB chunk size: `for byte_block in iter(lambda: f.read(65536), b"")`. This guarantees the scanner never consumes more than 64 Kilobytes of RAM per file, regardless of file size.
+- **Lookup:** The resulting hash is queried against the local `nexashield.db` `signatures` table.
+
+### 4.2 Local Heuristics
+Before resorting to heavy ML models, the engine applies fast deterministic string heuristics.
+- **Double Extension Checking:** It evaluates `os.path.basename(file_path).lower()`. If a file contains multiple periods and ends in an executable format (`.count('.') > 1 and .endswith(('.exe', '.bat', '.vbs'))`), it is immediately flagged as a "Suspicious Double Extension" (Medium severity), bypassing the need for a signature match.
+
+## 5. Real-Time File System Hooking (Watchdog)
+To provide active protection, the engine integrates the `watchdog` library.
+- **Observer Pattern:** It binds an `Observer` to monitor root directories.
+- **Event Handling:** The custom `RealTimeHandler(FileSystemEventHandler)` hooks into OS-level filesystem interrupts. When `on_created` or `on_modified` events fire, the file path is instantaneously piped back into the `scan_file()` logic, ensuring malware is detected the moment it touches the disk.

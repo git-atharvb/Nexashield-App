@@ -1,56 +1,53 @@
-# NexaShield AI Process Threat Model - Technical Documentation
+# NexaShield AI Process Threat Model - Deep Technical Evaluation
 
-## 1. Executive Summary
-The NexaShield Processes Module employs a localized Machine Learning (ML) model designed to analyze running system processes in real-time and classify their behavioral threat levels. Unlike traditional static antivirus engines that rely purely on hash-matching, this AI model acts as a Behavioral Analysis Engine, inspecting live telemetry (CPU usage, execution paths, networking, etc.) to flag potentially malicious or atypical activity.
+## 1. Executive Summary & Core Concept
+The NexaShield Processes Module represents a shift from static signature-based detection to dynamic Behavioral Analysis. It employs a localized Machine Learning model (`RandomForestRegressor` via `scikit-learn`) to monitor active system processes in real-time. By continuously evaluating telemetry anomalies, the model identifies sophisticated malware (like fileless malware, cryptominers, and C2 beacons) that easily bypass traditional hash-matching antiviruses.
 
-## 2. Architecture & Algorithm
-The core model utilizes a **Random Forest Regressor** (`RandomForestRegressor` from `scikit-learn`). 
+## 2. Advanced Algorithmic Architecture
+The engine relies on a highly tuned Random Forest algorithm.
 
-**Why Random Forest?**
-- **Non-Linear Relationships:** Process telemetry does not scale linearly. High CPU is normal for a game, but High CPU + Temp Directory + Active Network is highly anomalous. Random Forests construct decision trees that perfectly capture these complex "AND/OR" relationships.
-- **Robustness to Noise:** Random Forests are extremely resilient to noisy data, which is critical in an OS environment where resource spikes occur naturally.
-- **Performance:** Once trained, Random Forest inference is extremely fast, taking fractions of a millisecond per process. The model's `n_jobs` is explicitly forced to 1 during inference to prevent thread-explosion and Global Interpreter Lock (GIL) contention, ensuring the UI remains perfectly fluid at 60 FPS.
+### 2.1 Why Random Forest Regressor?
+- **Non-Linear State Mapping:** Process states do not follow a linear risk trajectory. For instance, high CPU usage is entirely normal for a video game rendering engine, but High CPU + Execution from `AppData` + Active Network Sockets forms a highly anomalous triad. Decision trees natively capture these complex "AND/OR" conditional branches.
+- **Noise Resilience:** Operating systems are inherently noisy, with legitimate background tasks frequently spiking resources. Random Forests use ensemble learning (bagging), which effectively smooths out OS-level stochastic noise, drastically reducing False Positives compared to a single decision tree or rigid hardcoded `IF/ELSE` statements.
+- **Inference Speed & GIL Optimization:** The `n_jobs` parameter is explicitly forced to 1. While multi-threading ML training is ideal, during real-time inference in a GUI app, spawning multiple C-level threads can cause Global Interpreter Lock (GIL) contention in Python, leading to UI stuttering. A single-threaded Random Forest inference takes `<0.1ms` per process, ensuring 60 FPS UI rendering.
 
-The model is configured with:
-- `n_estimators`: 100 (100 independent decision trees)
-- `max_depth`: 10 (Restricted depth to prevent overfitting on synthetic noise)
+### 2.2 Model Hyperparameters
+- `n_estimators`: 100 (Sufficient ensemble size for accuracy without bloating RAM).
+- `max_depth`: 10 (Strictly restricted to prevent the model from memorizing synthetic noise and overfitting).
 
-## 3. Feature Engineering & Telemetry
-The model relies on 7 distinct, dynamically extracted telemetry data points (features) gathered via `psutil`:
+## 3. Deep Feature Engineering & Telemetry Extraction
+The model ingests a 7-dimensional feature vector, extracted dynamically via the `psutil` library:
 
-1. `cpu_percent` (Continuous, 0-100): The percentage of CPU currently utilized by the process.
-2. `memory_percent` (Continuous, 0-100): The percentage of physical RAM utilized.
-3. `thread_count` (Discrete): The number of active threads inside the process.
-4. `is_system_user` (Binary: 0 or 1): Determines if the process is running under `SYSTEM`, `LOCAL SERVICE`, or `NETWORK SERVICE`.
-5. `is_temp_path` (Binary: 0 or 1): **High-value indicator**. Checks if the executable path or command line arguments contain "temp". Malware frequently drops payloads in `%TEMP%`.
-6. `is_appdata_path` (Binary: 0 or 1): **Medium-value indicator**. Checks if the process executes from "appdata". While some legitimate apps use this, it is highly favored by ransomware and Trojans.
-7. `has_network` (Binary: 0 or 1): Determines if the process has active network sockets (listening or established connections). 
+1. **`cpu_percent` (Continuous, 0.0 - 100.0):** Immediate CPU utilization slice.
+2. **`memory_percent` (Continuous, 0.0 - 100.0):** Physical RAM footprint ratio.
+3. **`thread_count` (Discrete Int):** Number of active parallel execution threads.
+4. **`is_system_user` (Binary: 0 or 1):** Validates if the process owner is `NT AUTHORITY\SYSTEM`, `LOCAL SERVICE`, or `NETWORK SERVICE`. Malware running as SYSTEM is exceedingly dangerous.
+5. **`is_temp_path` (Binary: 0 or 1) [High-Value Indicator]:** Cross-references the executable path (`exe`) and command-line arguments (`cmdline`) against known temporary directories (`%TEMP%`, `/tmp`). Malware droppers almost universally unpack payloads here.
+6. **`is_appdata_path` (Binary: 0 or 1) [Medium-Value Indicator]:** Validates execution from `AppData\Roaming` or `AppData\Local`. While Electron apps use this, ransomware heavily favors it due to write-permissions without UAC elevation.
+7. **`has_network` (Binary: 0 or 1):** Scans the process's active socket connections (`psutil.net_connections()`). Essential for detecting Reverse Shells and C2 beacons.
 
-## 4. Synthetic Dataset Generation & Training
-Because gathering 15,000 real-world malware telemetry samples on a single machine is dangerous and impractical, the model was trained using a custom Synthetic Telemetry Generator.
+## 4. Dataset Generation & Threat Weighting
+Training a behavioral model requires massive data. Since executing 15,000 real malware variants on a dev machine is catastrophic, the model relies on a custom Synthetic Telemetry Generator.
 
-**Dataset Characteristics:**
-- **Size:** 15,000 process samples.
-- **Base Distributions:** Benign background noise was generated using normal distributions (e.g., Average CPU ~ 5% with std dev 10%, Threads ~ 15).
-- **Threat Weighting Logic:** The dataset dynamically calculated a "True Threat Score" (0.0 to 1.0) using specific penalties:
-  - Base Benign Score: 0.1
-  - Execution from Temp Path: +0.4 penalty
-  - Execution from AppData: +0.2 penalty
-  - Active Network Connections: +0.2 penalty
-  - High CPU Utilization: up to +0.3 penalty
-  - High Thread Count: up to +0.1 penalty
-- **Stochastic Noise:** A 5% chance of random variance (noise injection) was applied to the scores to ensure the Random Forest learned generalized patterns rather than memorizing a rigid formula.
+**Dynamic Threat Scoring (Ground Truth Logic):**
+- **Base Score:** 0.1 (Benign background noise modeled via Gaussian distributions).
+- **Penalties:**
+  - Temp Path Execution: `+0.4`
+  - AppData Execution: `+0.2`
+  - Active Network Sockets: `+0.2`
+  - Max CPU Spikes: up to `+0.3`
+- **Stochastic Perturbation:** A 5% random variance (noise injection) was applied to the final calculated labels. This ensures the ML model learns generalized relationships rather than perfectly reverse-engineering the exact mathematical formula used to generate the data.
 
-## 5. Threat Level Bucketing
-The Random Forest outputs a continuous probability score from `0.0` (Absolute Safe) to `1.0` (Absolute Threat). The scanner categorizes this score into five actionable UI levels:
+## 5. Threat Level Bucketing (Probability Mapping)
+The Regressor outputs a continuous float `[0.0, 1.0]`, which is bucketed for the UI:
+- **Level 1 (Safe - Green):** `<= 0.20`. Standard benign activity.
+- **Level 2 (Low Risk - Blue):** `<= 0.40`. Slightly elevated (e.g., standard app using network).
+- **Level 3 (Moderate - Yellow):** `<= 0.60`. Atypical (e.g., running from AppData with network).
+- **Level 4 (High Risk - Orange):** `<= 0.80`. Strong Indicators of Compromise (IoC) (e.g., Temp directory execution).
+- **Level 5 (Critical - Red):** `> 0.80`. Immediate threat triad (Temp path + High CPU + Active Network), highly indicative of active ransomware or cryptomining.
 
-- **Level 1 (Safe) - Green:** Score `<= 0.20`. Standard background processes with no anomalous flags.
-- **Level 2 (Low Risk) - Blue:** Score `<= 0.40`. Slightly elevated telemetry (e.g., standard app utilizing network).
-- **Level 3 (Moderate) - Yellow:** Score `<= 0.60`. Atypical behavior (e.g., running from AppData with network sockets) warranting monitoring.
-- **Level 4 (High Risk) - Orange:** Score `<= 0.80`. Strong indicators of compromise (e.g., Temp directory execution).
-- **Level 5 (Critical) - Red:** Score `> 0.80`. Perfect storm of malicious signatures (Temp directory + Max CPU + Network Activity), heavily indicative of active ransomware, cryptominers, or C2 beacons.
-
-## 6. Implementation and UI Integration
-1. **Asynchronous Inference:** The UI launches a `ProcessWorker` (`QThread`). This thread iterates through hundreds of PIDs, querying `psutil` and passing the 7 features into the AI model. 
-2. **GIL Management:** To prevent UI freezing during intensive `predict()` operations, the background thread yields the Python Global Interpreter Lock (`time.sleep(0.001)`) between each process scan, resulting in butter-smooth rendering.
-3. **Dynamic Explainability:** When a user selects a process, the Forensics engine doesn't just show the color; it maps the telemetry back to the user in a human-readable format, generating a dynamic paragraph explaining *exactly* which features (e.g., Temp Directory, High CPU) triggered the specific AI threat level.
+## 6. Implementation & UI Integration Architecture
+1. **Asynchronous Processing (`QThread`):** The `ProcessWorker` iterates through all system PIDs using `psutil.process_iter()`. It extracts features, handles `AccessDenied` or `ZombieProcess` exceptions gracefully, and pushes vectors through `model.predict()`.
+2. **Event Loop Yielding:** To guarantee UI fluidity, the worker yields the GIL (`time.sleep(0.001)`) between every single process evaluation.
+3. **Forensics Explainability Engine:** A major challenge in AI is the "Black Box" effect. When a user clicks a flagged process, the Forensics engine reverse-maps the telemetry, dynamically generating human-readable text (e.g., *"This process was flagged as High Risk because it is executing from a Temporary directory while maintaining active network connections"*).
+4. **Remediation:** Leverages OS-level commands (`os.kill(pid, signal.SIGTERM)`) integrated directly into the UI to immediately suspend or terminate rogue processes.

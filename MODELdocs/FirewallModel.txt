@@ -1,0 +1,45 @@
+# NexaShield Firewall Model - Deep Technical Evaluation
+
+## 1. Executive Summary & Design Philosophy
+The NexaShield Firewall module (`FirewallManager`) acts as a powerful orchestration API over the native Windows Advanced Firewall (`NetFirewallRule`). Building a custom network filter driver (WFP) requires kernel-level signing and risks Blue Screens of Death (BSOD). By leveraging PowerShell interop, NexaShield achieves 100% stable, OS-native firewall orchestration without compromising system integrity.
+
+## 2. Deep Dive: Subprocess Execution Architecture
+All communication with the OS firewall happens through the internal `_run_ps_command(cmd)` helper function.
+
+### 2.1 The PowerShell Call
+```python
+subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd],
+               capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+```
+- **`-NoProfile`:** Prevents PowerShell from loading the user's profile scripts, reducing execution time from ~500ms down to ~50ms per call.
+- **`-ExecutionPolicy Bypass`:** Ensures that strict local execution policies do not block the dynamic command injection.
+- **`CREATE_NO_WINDOW`:** A critical Windows API flag that prevents the flashing of black command prompt windows on the desktop every time a rule is added or queried, ensuring a seamless GUI experience.
+
+## 3. Advanced Rule Parsing and Serialization
+Extracting firewall rules natively returns messy, formatted string tables that are notoriously difficult to parse via Regex.
+
+### 3.1 JSON Orchestration
+NexaShield solves this by forcing PowerShell to serialize the WMI COM objects directly into JSON via the pipeline:
+`Get-NetFirewallRule | Select-Object -First {limit} DisplayName, Direction, Action, Enabled, Name | ConvertTo-Json -Compress`
+- **`-Compress`:** Strips whitespace from the JSON output, minimizing the buffer size passed through the `stdout` pipe back to Python.
+- **Type Casting:** Python's `json.loads()` instantly ingests the object. The engine carefully maps PowerShell's integer enums (`Direction: 1`, `Action: 2`) back into human-readable strings (`"Inbound"`, `"Allow"`).
+
+## 4. Dynamic Rule Injection Engine
+The `add_rule()` method dynamically constructs `New-NetFirewallRule` strings. It intelligently appends arguments only if they are provided, ensuring clean command syntax.
+- **Application Paths:** Supports targeting specific binaries (`-Program "C:\malware.exe"`).
+- **IPs and Ports:** Supports blocking specific vectors (`-RemoteAddress`, `-Protocol`, `-LocalPort`).
+- **Deletion Fallback:** The `delete_rule()` method attempts removal via the absolute unique identifier (`-Name`). If that fails (e.g., if the user manually renamed it in the Windows GUI), it falls back to targeting the `-DisplayName`.
+
+## 5. Pre-Configured Security Macros
+The module ships with immediate-action defense macros designed for crisis scenarios:
+
+### 5.1 The "Quick Panic" Button
+Executes a maximum-priority Outbound block rule for TCP Ports 80 and 443. 
+*Purpose:* If a user suspects an active data exfiltration or ransomware payload is communicating with a C2 server, this macro instantly severs HTTP/HTTPS web surfing globally, freezing the attack while preserving local network connectivity (SMB, RDP) for administration.
+
+### 5.2 Anti-Telemetry Module
+Executes an Outbound block rule specifically targeting a hardcoded array of known Microsoft Windows Telemetry and Diagnostic data IP addresses (`13.77.161.179, 23.218.212.69, 65.55.108.23`).
+
+### 5.3 ICMP Stealth Mode
+Executes an Inbound block rule for the `ICMPv4` protocol.
+*Purpose:* Renders the machine invisible to standard `ping` sweeps on local network segments, actively preventing network discovery during lateral movement by an attacker.

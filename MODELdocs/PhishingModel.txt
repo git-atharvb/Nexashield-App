@@ -1,0 +1,38 @@
+# NexaShield Phishing Detection Model - Deep Technical Evaluation
+
+## 1. Executive Summary & Threat Landscape
+Phishing attacks continually evolve, rendering static URL blacklists obsolete within hours. The NexaShield Phishing Detector module combats this by utilizing a Hybrid Detection Engine that marries deterministic, zero-day heuristic string analysis with a serialized Machine Learning classifier. This ensures both lightning-fast detection of obvious structural anomalies and deep predictive analysis of obfuscated threats.
+
+## 2. Deep Dive: The Heuristic Analysis Engine
+The `analyze_heuristics(url)` function acts as the first line of defense. It leverages `urllib.parse` and regex to dissect the URL into its constituent parts (Scheme, Netloc, Path, Query) and applies 11 heavily weighted deterministic rules.
+
+### 2.1 The 11-Point Rule Matrix
+The engine starts with a score of 0 and aggregates penalties (capped at 100):
+1. **Raw IP Targeting (+50):** Regex `r'^(http|https)://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}'`. Attackers frequently use raw IPs to bypass domain reputation filters.
+2. **Punycode / Homograph Attacks (+40):** Detects the `xn--` prefix. Attackers use this to register domains like `apple.com` using Cyrillic characters (e.g., `аpple.com`) that visually deceive the user.
+3. **Suspicious TLDs (+25):** Matches against an array of high-abuse top-level domains: `['.xyz', '.top', '.gq', '.tk', '.ml', '.ga', '.cf', '.cn', '.vip', '.cc']`.
+4. **Obfuscation (The '@' Symbol) (+25):** The `@` symbol in a URL instructs the browser to ignore everything before it (e.g., `http://google.com@malicious.com` resolves to `malicious.com`).
+5. **Sensitive Keywords (+20):** Scans the raw string for high-value targets: `["login", "verify", "secure", "banking", "wallet", "crypto"]`.
+6. **Excessive Subdomains (+20):** Evaluates `domain.count('.') > 3`. Free hosting providers often force deep subdomain structures.
+7. **URL Shorteners (+20):** Matches against `['bit.ly', 'tinyurl.com', 'ow.ly', ...]`. Shorteners mask the true destination of the payload.
+8. **Open Redirects (+20):** Detects `//` inside the URL path, a common trick to utilize a legitimate site's redirect endpoint to bounce to a malicious payload.
+9. **Anomalous Length (+15):** Flags URLs exceeding 75 characters, often indicative of massive embedded tracking payloads or parameter stuffing.
+10. **Typosquatting (+15):** Flags domains containing multiple hyphens (`domain.count('-') > 1`).
+11. **Non-Standard Ports (+15):** Flags any connection not bound to `80` (HTTP) or `443` (HTTPS).
+
+## 3. Deep Dive: Machine Learning Integration
+The module utilizes a `PhishingAnalyzer` class that wraps the ML implementation to ensure UI threads remain unblocked during heavy inference.
+
+### 3.1 Model Deserialization & Inference
+- The system attempts to load `phishing_model.pkl` and `vectorizer.pkl` via Python's `pickle` library.
+- The `vectorizer.transform([url])` method converts the raw URL string into a sparse numerical matrix.
+- `model.predict_proba(features)[0][1]` extracts the exact mathematical probability (float) that the URL belongs to Class 1 (Phishing).
+
+### 3.2 The Hybrid Synthesis Engine
+The engine doesn't just average the scores; it uses a conditional synthesis logic:
+- **Heuristic Dominance:** If `heuristic_score > 75`, the engine takes `max(ml_score, heuristic_score)`. Why? If a URL contains a raw IP, an `@` symbol, and the word "login", it is definitively malicious, even if the ML model hasn't seen that specific permutation before.
+- **Weighted Average:** For lower heuristic scores, the engine applies a smooth blend: `(ml_score * 0.6) + (heuristic_score * 0.4)`, slightly favoring the ML model's generalized predictive power.
+
+## 4. UI Architecture & Asynchronous State
+- **Batch Processing (`BatchPhishingWorker`):** Supports massive `.txt` file imports. The `QThread` iterates through the list, emitting `progress` (int) and `result_ready` (dict) signals sequentially to keep the UI `QProgressBar` perfectly synced without hanging the main loop.
+- **Dynamic PDF Reporting:** The system uses `QPrinter(QPrinter.PrinterMode.HighResolution)` to convert an HTML-rendered table of the scan history into a PDF file. The resulting raw bytes are immediately piped into the `FileManager.export_file()` method, ensuring the report is symmetrically encrypted and vaulted.

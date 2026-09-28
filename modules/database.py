@@ -54,6 +54,35 @@ class DatabaseManager:
         self.cursor.execute("INSERT OR IGNORE INTO signatures VALUES (?, ?, ?, ?)", 
                             (eicar_hash, "EICAR-Test-File", "Virus", "High"))
 
+        # AI Settings Table
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS api_keys (
+                service TEXT PRIMARY KEY,
+                api_key TEXT
+            )
+        """)
+
+        # AI Chat Sessions
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ai_chat_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT,
+                created_at TEXT
+            )
+        """)
+        
+        # AI Chat Messages
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ai_chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER,
+                role TEXT,
+                content TEXT,
+                timestamp TEXT,
+                FOREIGN KEY(session_id) REFERENCES ai_chat_sessions(id) ON DELETE CASCADE
+            )
+        """)
+
         # Migration: Add columns if they don't exist (for existing databases)
         try:
             self.cursor.execute("ALTER TABLE users ADD COLUMN phone TEXT")
@@ -118,4 +147,45 @@ class DatabaseManager:
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.cursor.execute("INSERT INTO siem_events (timestamp, source, description, severity) VALUES (?, ?, ?, ?)",
                             (timestamp, source, description, severity))
+        self.conn.commit()
+
+    def get_api_key(self, service="openrouter"):
+        """Get API key for a service."""
+        self.cursor.execute("SELECT api_key FROM api_keys WHERE service=?", (service,))
+        result = self.cursor.fetchone()
+        return result[0] if result else None
+        
+    def set_api_key(self, service, api_key):
+        """Set or update API key for a service."""
+        self.cursor.execute("INSERT OR REPLACE INTO api_keys (service, api_key) VALUES (?, ?)", (service, api_key))
+        self.conn.commit()
+
+    # --- AI Chat History Methods ---
+    def create_chat_session(self, title="New Chat"):
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.cursor.execute("INSERT INTO ai_chat_sessions (title, created_at) VALUES (?, ?)", (title, timestamp))
+        self.conn.commit()
+        return self.cursor.lastrowid
+
+    def get_chat_sessions(self):
+        self.cursor.execute("SELECT id, title, created_at FROM ai_chat_sessions ORDER BY id DESC")
+        return self.cursor.fetchall()
+
+    def get_chat_messages(self, session_id):
+        self.cursor.execute("SELECT role, content FROM ai_chat_messages WHERE session_id=? ORDER BY id ASC", (session_id,))
+        return self.cursor.fetchall()
+
+    def add_chat_message(self, session_id, role, content):
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.cursor.execute("INSERT INTO ai_chat_messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)", 
+                            (session_id, role, content, timestamp))
+        self.conn.commit()
+        
+    def update_chat_title(self, session_id, title):
+        self.cursor.execute("UPDATE ai_chat_sessions SET title=? WHERE id=?", (title, session_id))
+        self.conn.commit()
+
+    def delete_chat_session(self, session_id):
+        self.cursor.execute("DELETE FROM ai_chat_messages WHERE session_id=?", (session_id,))
+        self.cursor.execute("DELETE FROM ai_chat_sessions WHERE id=?", (session_id,))
         self.conn.commit()

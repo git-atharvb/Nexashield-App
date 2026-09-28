@@ -12,6 +12,7 @@ from subtabs.settings import SettingsWidget
 from subtabs.about import AboutWidget
 from subtabs.help import HelpWidget
 from subtabs.contact import ContactWidget
+from subtabs.ai_chat import AiChatWidget
 
 class SIEMDashboard(QWidget):
     def __init__(self, session_manager=None):
@@ -47,7 +48,8 @@ class SIEMDashboard(QWidget):
             ("⚙️ Settings", 2),
             ("ℹ️ About", 3),
             ("❓ Help", 4),
-            ("📞 Contact", 5)
+            ("📞 Contact", 5),
+            ("🤖 AI Assistant", 6)
         ]
 
         for text, idx in menus:
@@ -70,6 +72,7 @@ class SIEMDashboard(QWidget):
         self.content_area.addWidget(AboutWidget())
         self.content_area.addWidget(HelpWidget())
         self.content_area.addWidget(ContactWidget())
+        self.content_area.addWidget(AiChatWidget(self.session))
 
         # Add to main layout
         main_layout.addWidget(self.sidebar)

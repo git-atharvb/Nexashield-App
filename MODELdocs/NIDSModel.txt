@@ -1,0 +1,44 @@
+# NexaShield Network Intrusion Detection System (NIDS) - Deep Technical Evaluation
+
+## 1. Executive Summary & Sniffing Mechanics
+The NIDS module acts as a real-time Deep Packet Inspection (DPI) and Intrusion Prevention System (IPS). It bypasses the standard Windows socket limitations by leveraging the `scapy` library to bind directly to the OS network interfaces (via Npcap/WinPcap), allowing raw promiscuous-mode packet capture.
+
+## 2. Deep Dive: The `SnifferWorker` Architecture
+Packet capture is a blocking I/O operation. Running it on the main GUI thread would instantly lock the application. NexaShield utilizes a dedicated `QThread` (`SnifferWorker`).
+
+### 2.1 Interface Resolution & Binding
+- Dynamically enumerates active interfaces using `scapy.interfaces.get_working_ifaces()`.
+- **Crucial Fallback:** Maps the human-readable NIC names to Windows system device names (`\Device\NPF_...`). If `scapy` fails to resolve IP strings for UI display, the engine falls back to parsing `psutil.net_if_addrs()` to extract the exact IPv4 `AF_INET` strings.
+
+### 2.2 The Sniffing Loop & CPU Optimization
+- The core loop executes `sniff(prn=self.process_packet, store=False, stop_filter=self.should_stop, timeout=2)`.
+- **`store=False`:** Absolutely critical for memory safety. If set to True, Scapy appends every packet to a massive array in RAM. On a Gigabit connection, this would trigger an OOM (Out of Memory) crash within minutes.
+- **`timeout=2`:** Ensures that if the network interface goes completely silent, the `sniff` function returns every 2 seconds to check the `self.is_running` flag, allowing the thread to terminate cleanly without hanging the application closure.
+
+## 3. Deep Packet Inspection (DPI) & Snort-Style Rule Engine
+Inside the `process_packet` callback, the engine dissects the ISO/OSI model layers:
+
+### 3.1 Protocol Extraction
+The engine checks `packet.haslayer()` sequentially:
+- Extracts `src`/`dst` from `IP`.
+- Extracts `sport`/`dport` from `TCP` and `UDP`.
+- Identifies `ICMP` types/codes and `DNS` Query/Responses.
+- Safely handles `ARP` broadcasts by catching `packet['ARP'].psrc`.
+
+### 3.2 The Signature Engine
+If the packet contains a `Raw` layer, the byte payload is extracted and cast to uppercase (`bytes(packet['Raw'].load).upper()`) for case-insensitive matching against a dictionary of rules:
+- **NMAP Scans:** Matches `b"NMAP"`. (High Risk).
+- **Remote Command Execution (RCE):** Matches `b"CMD.EXE"`. (High Risk).
+- **Vulnerable Service Targeting:** Triggers on `dport: 445` (SMB Protocol, notoriously targeted by WannaCry/EternalBlue exploits).
+
+### 3.3 Hexdumping and Telemetry
+For UI forensic analysis, the engine safely wraps `scapy.utils.hexdump(packet, dump=True)` and `packet.show(dump=True)` in a try/except block. If a packet is malformed, it catches the exception rather than crashing the sniffing thread, ensuring continuous operation.
+
+## 4. Active Response (IPS) & OS-Level Blocking
+When a threat is verified, the system transitions from Detection to Prevention via the `block_ip_os()` function.
+- It executes raw OS-level commands via `subprocess.run(shell=True, stdout=subprocess.DEVNULL)`.
+- **Windows Integration:** Executes `netsh advfirewall firewall add rule name="NexaShield Block {ip}" dir=in action=block remoteip={ip}`.
+- **Linux Integration:** Executes `iptables -A INPUT -s {ip} -j DROP`.
+
+## 5. UI Telemetry & Custom Rendering
+- **`NIDSTrafficChart`:** A highly optimized, custom `QWidget` that draws the Packets-Per-Second (PPS) line graph using `QPainter`. It utilizes a `collections.deque(maxlen=60)` to maintain a rolling memory buffer of the last 60 seconds of traffic. It dynamically recalculates the Y-axis (`self.max_val *= 0.95`) to automatically scale down the graph when traffic spikes subside, ensuring the visual data remains relevant.

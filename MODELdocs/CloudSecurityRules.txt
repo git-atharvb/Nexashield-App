@@ -1,0 +1,34 @@
+# NexaShield Cloud Security (CASB) Rules - Deep Technical Evaluation
+
+## 1. Executive Summary & CASB Architecture
+The Cloud Security module functions as a localized Cloud Access Security Broker (CASB). It utilizes Python's native `urllib.request` library to interface securely via REST APIs (specifically Google Drive API v3). It performs three critical operations directly in memory without relying on third-party SaaS dashboards: Posture Management, Threat Intel Validation, and Context-Aware Data Loss Prevention (DLP).
+
+## 2. Deep Dive: Cloud Security Posture Management (CSPM)
+The engine queries file metadata (`fields=files(id,name,mimeType,size,permissions,shared)`) and evaluates the exact `permissions` dictionary array.
+- **Exposure Identification:** It iterates through the permissions list looking for `type == 'anyone'`. This specific Google Drive flag indicates the file is exposed to the public internet (link sharing enabled).
+- **Zero-Trust Enforcement (`revoke_public_access`):** If a file is flagged as publicly exposed, the module can execute an automated API call. It sends a highly targeted `DELETE` HTTP request specifically to the `/permissions/anyone` endpoint for that `file_id`. This instantly revokes public access while preserving all authorized individual user access.
+
+## 3. Deep Dive: Context-Aware DLP
+Standard regex-based DLP generates massive amounts of False Positives (e.g., flagging a tracking number as a credit card). NexaShield employs a 2-stage verification system inside `_scan_dlp_contextual()`.
+
+### 3.1 Regular Expression (Regex) Phase
+- **Credit Cards:** `\b(?:\d{4}[ -]?){3}\d{4}\b`
+- **AWS Access Keys:** `\bAKIA[0-9A-Z]{16}\b` (Critical severity, immediately grants cloud infrastructure access).
+- **Private Cryptographic Keys:** `-----BEGIN (RSA|OPENSSH|EC|PGP) PRIVATE KEY-----`.
+
+### 3.2 Context Verification & Validation Phase
+To prevent False Positives, the engine mandates secondary checks:
+- **Luhn Algorithm Validation:** For Credit Cards, the extracted string is piped into a Python implementation of the Luhn checksum (`_validate_luhn`). If `(checksum % 10 != 0)`, it is mathematically impossible to be a valid credit card, and the match is discarded.
+- **Radius Context Check:** If a regex match passes validation, the engine extracts a 100-character radius of surrounding text (`content[start:end]`). It then scans this radius for contextual keywords (`"card", "cvv", "stripe", "ssn"`). The threat is only flagged as High Confidence if the context validates the regex.
+
+## 4. Deep Dive: Cloud Antivirus & Threat Intelligence
+- **File Hashing:** Files downloaded from the cloud are converted to a SHA-256 hash using `hashlib.sha256(file_bytes).hexdigest()`.
+- **MalwareBazaar Integration:** The hash is posted to `mb-api.abuse.ch` via a URL-encoded data payload. This provides instant Threat Intelligence. If the hash matches, the API returns the exact malware signature (e.g., "Emotet", "AgentTesla") and behavior tags.
+- **Phishing Extraction:** The engine uses a massive URL regex to extract all links inside documents (`text/plain`, `text/csv`). It cross-references these links against malicious top-level domains (`.tk`, `.ml`, `.ru`) and tunnel services (`ngrok.io`).
+
+## 5. Cryptographic Vaulting Implementation
+For files deemed too dangerous to remain in the cloud, the `vault_file()` method triggers:
+1. **Download:** The raw byte array is pulled into local memory.
+2. **XOR Obfuscation:** The array undergoes a rapid bitwise XOR operation (`b ^ 0xAA`). This safely neuters executable malware so it cannot accidentally be run on the local machine.
+3. **Local Storage:** The obfuscated bytes are written to disk with a `.nxvault` extension.
+4. **Cloud Deletion:** A `DELETE` API call is sent to `googleapis.com/drive/v3/files/{file_id}`, permanently purging the threat from the cloud infrastructure.

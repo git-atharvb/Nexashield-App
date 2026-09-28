@@ -8,6 +8,7 @@ nexashield.db
 # Secrets - DO NOT PUSH
 client_secret.json
 client.json
+.env
 
 # Large datasets
 Datasets/
