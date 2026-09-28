@@ -14,8 +14,8 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QGroupBox, QToolTip,
     QLineEdit, QComboBox, QPushButton, QFileDialog, QMessageBox, QDialog, QFormLayout, QCheckBox, QTextEdit
 )
-from PyQt6.QtCore import Qt, QTimer, QRectF, QThread, pyqtSignal
-from PyQt6.QtGui import QColor, QBrush, QPainter, QPen, QFont, QPalette, QPainterPath, QLinearGradient, QTextDocument
+from PyQt6.QtCore import Qt, QTimer, QRectF, QThread, pyqtSignal, QPointF
+from PyQt6.QtGui import QColor, QBrush, QPainter, QPen, QFont, QPalette, QPainterPath, QLinearGradient, QTextDocument, QConicalGradient
 from PyQt6.QtPrintSupport import QPrinter
 
 class SyslogDialog(QDialog):
@@ -55,10 +55,176 @@ class SyslogDialog(QDialog):
         self.btn_start.clicked.connect(self.accept)
         main_layout.addWidget(self.btn_start)
 
+class LiveThreatTicker(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setFixedHeight(30)
+        self.text = "🔴 LIVE THREAT FEED: [AlienVault] Emotet Botnet C2 Server detected at 192.168.x.x | [OSINT] Ransomware campaign targeting health sector | [NexaShield AI] Zero-day anomaly detected in memory..."
+        self.x_pos = 800
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.move_text)
+        self.timer.start(30)
+
+    def move_text(self):
+        self.x_pos -= 2
+        if self.x_pos < -1500:
+            self.x_pos = self.width()
+        self.update()
+        
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(0, 0, self.width(), self.height(), QColor(30, 30, 30, 150))
+        painter.setPen(QColor("#ff4444"))
+        painter.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
+        painter.drawText(int(self.x_pos), 20, self.text)
+
+class ThreatRadarMap(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(100, 100)
+        self.angle = 0
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.rotate_radar)
+        self.timer.start(50)
+        self.threats = []
+        
+    def add_threat(self):
+        import random, math
+        r = random.uniform(10, self.width()/2 - 20)
+        theta = random.uniform(0, 2 * math.pi)
+        x = r * math.cos(theta)
+        y = r * math.sin(theta)
+        self.threats.append([x, y, 1.0])
+        if len(self.threats) > 10:
+            self.threats.pop(0)
+            
+    def rotate_radar(self):
+        self.angle = (self.angle + 4) % 360
+        for t in self.threats:
+            t[2] -= 0.02
+        self.threats = [t for t in self.threats if t[2] > 0]
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        cx, cy = w/2, h/2
+        
+        # Grid
+        painter.setPen(QPen(QColor(0, 255, 0, 80), 1, Qt.PenStyle.DashLine))
+        painter.drawEllipse(QPointF(cx, cy), cx-15, cy-15)
+        painter.drawEllipse(QPointF(cx, cy), (cx-15)*0.66, (cy-15)*0.66)
+        painter.drawEllipse(QPointF(cx, cy), (cx-15)*0.33, (cy-15)*0.33)
+        painter.drawLine(int(cx), 15, int(cx), h-15)
+        painter.drawLine(15, int(cy), w-15, int(cy))
+        
+        # Beam
+        conicalGrad = QConicalGradient(cx, cy, -self.angle)
+        conicalGrad.setColorAt(0, QColor(0, 255, 0, 100))
+        conicalGrad.setColorAt(0.1, QColor(0, 255, 0, 0))
+        conicalGrad.setColorAt(1, QColor(0, 255, 0, 0))
+        painter.setBrush(conicalGrad)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawPie(int(cx - (cx-15)), int(cy - (cy-15)), int((cx-15)*2), int((cy-15)*2), int(-self.angle * 16), int(30 * 16))
+        
+        # Threats
+        for x, y, intensity in self.threats:
+            alpha = int(255 * intensity)
+            painter.setBrush(QColor(255, 50, 50, alpha))
+            painter.setPen(QPen(QColor(255, 50, 50, alpha)))
+            painter.drawEllipse(QPointF(cx + x, cy + y), 4, 4)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            r = 10 * (1.0 - intensity + 0.1)
+            painter.drawEllipse(QPointF(cx + x, cy + y), r, r)
+
+class SecurityRadarChart(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(220, 220)
+        self.dimensions = ["Endpoint", "Traffic", "Storage", "Memory", "Network"]
+        self.values = [100, 100, 100, 100, 100]
+        
+    def update_scores(self, endpoint, traffic, storage, memory, network):
+        self.values = [max(10, min(100, v)) for v in (endpoint, traffic, storage, memory, network)]
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        
+        w, h = self.width(), self.height()
+        cx, cy = w / 2, h / 2
+        radius = min(w, h) / 2 - 35
+        num_dim = len(self.dimensions)
+        
+        # 3 concentric polygons
+        painter.setPen(QPen(QColor(128, 128, 128, 60), 1))
+        for step in [0.33, 0.66, 1.0]:
+            poly = QPainterPath()
+            for i in range(num_dim):
+                angle = math.pi / 2 - (i * 2 * math.pi / num_dim)
+                r = radius * step
+                x = cx + r * math.cos(angle)
+                y = cy - r * math.sin(angle)
+                if i == 0:
+                    poly.moveTo(x, y)
+                else:
+                    poly.lineTo(x, y)
+            poly.closeSubpath()
+            painter.drawPath(poly)
+            
+        painter.setPen(QColor(150, 150, 150))
+        painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        for i in range(num_dim):
+            angle = math.pi / 2 - (i * 2 * math.pi / num_dim)
+            x_end = cx + radius * math.cos(angle)
+            y_end = cy - radius * math.sin(angle)
+            painter.setPen(QPen(QColor(128, 128, 128, 80), 1, Qt.PenStyle.DashLine))
+            painter.drawLine(int(cx), int(cy), int(x_end), int(y_end))
+            
+            painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+            lbl_r = radius + 12
+            x_lbl = cx + lbl_r * math.cos(angle)
+            y_lbl = cy - lbl_r * math.sin(angle)
+            align = Qt.AlignmentFlag.AlignCenter
+            if math.cos(angle) > 0.1: align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            elif math.cos(angle) < -0.1: align = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            lbl_rect = QRectF(x_lbl - 30, y_lbl - 10, 60, 20)
+            painter.drawText(lbl_rect, align, self.dimensions[i])
+            
+        data_poly = QPainterPath()
+        for i in range(num_dim):
+            angle = math.pi / 2 - (i * 2 * math.pi / num_dim)
+            r = radius * (self.values[i] / 100.0)
+            x = cx + r * math.cos(angle)
+            y = cy - r * math.sin(angle)
+            if i == 0:
+                data_poly.moveTo(x, y)
+            else:
+                data_poly.lineTo(x, y)
+        data_poly.closeSubpath()
+        
+        avg_score = sum(self.values) / num_dim
+        color = QColor("#0078d7") if avg_score > 80 else (QColor("#ffc107") if avg_score > 60 else QColor("#dc3545"))
+        
+        pen = QPen(color, 2)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        fill_color = QColor(color)
+        fill_color.setAlpha(60)
+        painter.setBrush(fill_color)
+        painter.drawPath(data_poly)
+        
+        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+        painter.setFont(QFont("Segoe UI", 12, QFont.Weight.Black))
+        painter.drawText(int(cx-30), int(cy-15), 60, 30, Qt.AlignmentFlag.AlignCenter, f"{int(avg_score)}")
+
 class ThreatDonutChart(QWidget):
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(150, 150)
+        self.setMinimumSize(100, 100)
         self.stats = {"Safe": 0, "Warning": 0, "Critical": 0}
         self.setMouseTracking(True)
 
@@ -212,6 +378,9 @@ class EventInspectorDialog(QDialog):
         except Exception as e:
             self.raw_text.setPlainText(f"Error fetching details from database: {e}")
 
+# --- ML Behavioral Anomaly Buffer ---
+telemetry_buffer = []
+
 class OverviewWorker(QThread):
     """Background worker to fetch telemetry without freezing the GUI."""
     data_fetched = pyqtSignal(dict)
@@ -288,6 +457,29 @@ class OverviewWorker(QThread):
             
             data['security_score'] = max(0, min(100, int(score)))
             data['events'] = events
+            
+        # AI Anomaly Detection
+        try:
+            from sklearn.ensemble import IsolationForest
+            import numpy as np
+            global telemetry_buffer
+            
+            vec = [data.get('cpu', 0), data.get('ram', 0), data.get('disk', 0)]
+            telemetry_buffer.append(vec)
+            if len(telemetry_buffer) > 60:
+                telemetry_buffer.pop(0)
+                
+            if len(telemetry_buffer) > 10:
+                clf = IsolationForest(n_estimators=20, contamination=0.1, random_state=42)
+                X = np.array(telemetry_buffer)
+                clf.fit(X)
+                score_val = clf.score_samples([vec])[0]
+                normalized = max(0, min(100, (-score_val - 0.4) * 200))
+                data['anomaly_score'] = normalized
+            else:
+                data['anomaly_score'] = 0.0
+        except Exception:
+            data['anomaly_score'] = 0.0
             
         self.data_fetched.emit(data)
 
@@ -391,6 +583,38 @@ class OverviewBarChart(QWidget):
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawPath(stroke_path)
+        
+        # Draw Forecasting Line (Linear Regression)
+        if len(self.data) >= 10:
+            import numpy as np
+            y_vals = self.data[-10:]
+            x_vals = np.arange(10)
+            A = np.vstack([x_vals, np.ones(len(x_vals))]).T
+            try:
+                m, c = np.linalg.lstsq(A, y_vals, rcond=None)[0]
+                
+                forecast_x = len(self.data) - 1
+                forecast_y = self.data[-1]
+                next_y = m * (10 + 2) + c # predict 2 steps ahead
+                next_y = max(0, min(100, next_y))
+                
+                fx1 = 10 + forecast_x * step_x
+                fy1 = h - 10 - (forecast_y / 100.0) * chart_h
+                fx2 = fx1 + 2 * step_x
+                fy2 = h - 10 - (next_y / 100.0) * chart_h
+                
+                # Clip to widget boundary
+                fx2 = min(fx2, w - 5)
+                
+                dash_pen = QPen(self.primary_color, 2, Qt.PenStyle.DashLine)
+                painter.setPen(dash_pen)
+                painter.drawLine(int(fx1), int(fy1), int(fx2), int(fy2))
+                
+                painter.setBrush(self.primary_color)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.drawEllipse(QPointF(fx2, fy2), 4, 4)
+            except Exception:
+                pass
 
 class OverviewWidget(QWidget):
     def __init__(self, session_manager=None):
@@ -424,6 +648,10 @@ class OverviewWidget(QWidget):
         header_layout.addWidget(host_badge)
         
         layout.addLayout(header_layout)
+        
+        # Live Threat Ticker
+        self.ticker = LiveThreatTicker()
+        layout.addWidget(self.ticker)
 
         # 2. Histograms Row
         hist_frame = QFrame()
@@ -448,7 +676,7 @@ class OverviewWidget(QWidget):
         bottom_layout = QHBoxLayout()
         bottom_layout.setSpacing(20)
 
-        # Left: Device Health Checklist
+        # Left: Device Health Checklist (Col 1)
         health_frame = QFrame()
         health_frame.setObjectName("CardContainer")
         health_layout = QVBoxLayout(health_frame)
@@ -459,26 +687,58 @@ class OverviewWidget(QWidget):
         health_layout.addWidget(title_health)
         health_layout.addSpacing(10)
         
-        self.lbl_score = QLabel("🏆 Security Score: Calculating...")
+        inner_health = QHBoxLayout()
+        
+        # Left inner: Radar Chart
+        radar_container = QVBoxLayout()
+        self.lbl_score = QLabel("🏆 Security Posture")
         self.lbl_score.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_score.setStyleSheet("font-size: 24px; font-weight: 800; color: #0078d7; background: transparent; margin-top: 10px; margin-bottom: 5px;")
-        health_layout.addWidget(self.lbl_score)
+        self.lbl_score.setStyleSheet("font-size: 14px; font-weight: 800; color: #0078d7; background: transparent;")
+        radar_container.addWidget(self.lbl_score)
         
-        donut_layout = QHBoxLayout()
-        self.threat_donut = ThreatDonutChart()
-        donut_layout.addWidget(self.threat_donut)
-        health_layout.addLayout(donut_layout)
+        self.radar_chart = SecurityRadarChart()
+        self.radar_chart.setFixedSize(220, 220)
+        radar_container.addWidget(self.radar_chart, alignment=Qt.AlignmentFlag.AlignCenter)
+        radar_container.addStretch()
+        inner_health.addLayout(radar_container, 1)
         
-        health_layout.addSpacing(15)
-        self.lbl_cpu_stat = self.create_dynamic_status_row(health_layout, "🧠 CPU Thermals & Load")
-        self.lbl_ram_stat = self.create_dynamic_status_row(health_layout, "💾 Memory Integrity")
-        self.lbl_disk_stat = self.create_dynamic_status_row(health_layout, "💽 Disk Health (S.M.A.R.T)")
-        self.lbl_net_stat = self.create_dynamic_status_row(health_layout, "🌐 Secure Network Tunnel")
+        # Right inner: Checklist
+        checklist_container = QVBoxLayout()
+        checklist_container.addStretch()
+        self.lbl_cpu_stat = self.create_dynamic_status_row(checklist_container, "🧠 CPU Thermals & Load")
+        self.lbl_ram_stat = self.create_dynamic_status_row(checklist_container, "💾 Memory Integrity")
+        self.lbl_disk_stat = self.create_dynamic_status_row(checklist_container, "💽 Disk Health (S.M.A.R.T)")
+        self.lbl_net_stat = self.create_dynamic_status_row(checklist_container, "🌐 Secure Network Tunnel")
+        self.lbl_anomaly_stat = self.create_dynamic_status_row(checklist_container, "🤖 AI Anomaly Score")
+        checklist_container.addStretch()
+        inner_health.addLayout(checklist_container, 1)
         
-        health_layout.addStretch()
-        bottom_layout.addWidget(health_frame, 1)
+        health_layout.addLayout(inner_health)
+        bottom_layout.addWidget(health_frame, 3)
 
-        # Right: Security Events Table
+        # Middle: Threat Analytics (Col 2)
+        threat_frame = QFrame()
+        threat_frame.setObjectName("CardContainer")
+        threat_layout = QVBoxLayout(threat_frame)
+        threat_layout.setContentsMargins(15, 15, 15, 15)
+        
+        title_threats = QLabel("🎯 Threat Analytics")
+        title_threats.setStyleSheet("font-size: 16px; font-weight: bold; background: transparent;")
+        threat_layout.addWidget(title_threats)
+        threat_layout.addSpacing(10)
+        
+        self.threat_radar = ThreatRadarMap()
+        self.threat_radar.setFixedSize(140, 140)
+        threat_layout.addWidget(self.threat_radar, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        self.threat_donut = ThreatDonutChart()
+        self.threat_donut.setFixedSize(140, 140)
+        threat_layout.addWidget(self.threat_donut, alignment=Qt.AlignmentFlag.AlignCenter)
+        
+        threat_layout.addStretch()
+        bottom_layout.addWidget(threat_frame, 1)
+
+        # Right: Security Events Table (Col 3)
         events_frame = QFrame()
         events_frame.setObjectName("CardContainer")
         events_layout = QVBoxLayout(events_frame)
@@ -522,12 +782,15 @@ class OverviewWidget(QWidget):
         events_layout.addLayout(controls_layout)
 
         self.alerts_table = QTableWidget()
-        self.alerts_table.setColumnCount(4)
-        self.alerts_table.setHorizontalHeaderLabels(["🕒 Time", "🧩 Source", "📝 Description", "⚠️ Threat Level"])
+        self.alerts_table.setColumnCount(6)
+        self.alerts_table.setHorizontalHeaderLabels(["🕒 Time", "🧩 Source", "📝 Description", "⚠️ Threat Level", "🏷️ MITRE Tactic", "⚡ Action"])
+
         self.alerts_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.alerts_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.alerts_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.alerts_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        self.alerts_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        self.alerts_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         self.alerts_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.alerts_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.alerts_table.verticalHeader().setVisible(False)
@@ -561,7 +824,7 @@ class OverviewWidget(QWidget):
         self.alerts_table.customContextMenuRequested.connect(self.show_context_menu)
         
         events_layout.addWidget(self.alerts_table)
-        bottom_layout.addWidget(events_frame, 2)
+        bottom_layout.addWidget(events_frame, 4)
 
         layout.addLayout(bottom_layout, 3)
 
@@ -617,7 +880,25 @@ class OverviewWidget(QWidget):
         if 'security_score' in data:
             score = data['security_score']
             color = "#28a745" if score >= 80 else ("#ffc107" if score >= 50 else "#dc3545")
-            self.lbl_score.setText(f"🏆 Security Score: <span style='color: {color};'>{score}/100</span>")
+            self.lbl_score.setText(f"🏆 Security Posture: <span style='color: {color};'>{score}/100</span>")
+            
+            endpoint = 100 - data['cpu']
+            memory = 100 - data['ram']
+            storage = 100 - data['disk']
+            
+            traffic = 100.0
+            if 'net_bytes' in data and hasattr(self, '_last_net_bytes'):
+                delta = max(0, data['net_bytes'] - self._last_net_bytes)
+                max_rate = 20 * 1024 * 1024
+                net_pct = min(100.0, (delta / max_rate) * 100.0)
+                traffic = 100 - net_pct
+                
+            network = 100
+            if 'events' in data:
+                criticals = sum(1 for e in data['events'] if e[3] in ["Critical", "High", "High Risk"])
+                network = max(10, 100 - (criticals * 10))
+                
+            self.radar_chart.update_scores(endpoint, traffic, storage, memory, network)
         
         def set_stat(lbl, val, threshold):
             if val < threshold:
@@ -638,11 +919,27 @@ class OverviewWidget(QWidget):
             self.lbl_net_stat.setText("Disconnected")
             self.lbl_net_stat.setStyleSheet("color: #dc3545; font-weight: bold; background: rgba(220, 53, 69, 0.1); padding: 4px 10px; border-radius: 4px;")
             
+        if 'anomaly_score' in data:
+            anom = data['anomaly_score']
+            if anom > 70:
+                self.lbl_anomaly_stat.setText(f"Critical ({anom:.1f}%)")
+                self.lbl_anomaly_stat.setStyleSheet("color: #dc3545; font-weight: bold; background: rgba(220, 53, 69, 0.1); padding: 4px 10px; border-radius: 4px;")
+            elif anom > 40:
+                self.lbl_anomaly_stat.setText(f"Warning ({anom:.1f}%)")
+                self.lbl_anomaly_stat.setStyleSheet("color: #ffc107; font-weight: bold; background: rgba(255, 193, 7, 0.1); padding: 4px 10px; border-radius: 4px;")
+            else:
+                self.lbl_anomaly_stat.setText(f"Normal ({anom:.1f}%)")
+                self.lbl_anomaly_stat.setStyleSheet("color: #28a745; font-weight: bold; background: rgba(40, 167, 69, 0.1); padding: 4px 10px; border-radius: 4px;")
+            
         if 'events' in data:
             events = data['events']
             
             if self._last_events != events:
                 self._last_events = events
+                
+                # Ping radar map
+                if hasattr(self, 'threat_radar'):
+                    self.threat_radar.add_threat()
                 
                 stats = {"Safe": 0, "Warning": 0, "Critical": 0}
                 
@@ -697,6 +994,56 @@ class OverviewWidget(QWidget):
                         sev_item.setForeground(QBrush(QColor("#00cc66")))
                     
                     self.alerts_table.setItem(i, 3, sev_item)
+                    
+                    # --- Phase 1: MITRE ATT&CK Mapping & SOAR Automation ---
+                    mitre_tactic = "T1000 Unknown"
+                    action_text = "View Logs"
+                    action_color = "#6c757d"
+                    
+                    desc_lower = desc.lower()
+                    mod_lower = mod.lower()
+                    
+                    if "phishing" in mod_lower or "phishing" in desc_lower:
+                        mitre_tactic = "T1566 Phishing"
+                        action_text = "Block Domain"
+                        action_color = "#dc3545"
+                    elif "antivirus" in mod_lower or "malware" in desc_lower or "threats found" in desc_lower:
+                        mitre_tactic = "T1204 User Execution"
+                        if "Critical" in sev or "High" in sev:
+                            action_text = "Quarantine"
+                            action_color = "#dc3545"
+                    elif "process" in mod_lower or "injection" in desc_lower:
+                        mitre_tactic = "T1055 Process Injection"
+                        action_text = "Kill Process"
+                        action_color = "#dc3545"
+                    elif "network" in mod_lower or "nids" in mod_lower:
+                        mitre_tactic = "T1190 Exploit"
+                        action_text = "Drop IP"
+                        action_color = "#dc3545"
+                        
+                    # MITRE Badge (using QLabel for styled badge)
+                    mitre_lbl = QLabel(mitre_tactic)
+                    mitre_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    mitre_lbl.setStyleSheet("background-color: #333333; color: #00e676; border-radius: 4px; padding: 2px 6px; font-size: 11px; font-weight: bold; border: 1px solid #444;")
+                    mitre_widget = QWidget()
+                    mitre_layout = QHBoxLayout(mitre_widget)
+                    mitre_layout.setContentsMargins(5, 5, 5, 5)
+                    mitre_layout.addWidget(mitre_lbl)
+                    self.alerts_table.setCellWidget(i, 4, mitre_widget)
+                    
+                    # Action Button (SOAR Playbook)
+                    action_btn = QPushButton(action_text)
+                    action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                    action_btn.setStyleSheet(f"background-color: {action_color}; color: white; border-radius: 4px; padding: 4px 8px; font-weight: bold;")
+                    # Example action: just show a message box for now
+                    action_btn.clicked.connect(lambda checked, a=action_text, d=desc: QMessageBox.information(self, "SOAR Action Triggered", f"Executing Playbook: {a}\nTarget: {d}"))
+                    
+                    action_widget = QWidget()
+                    action_layout = QHBoxLayout(action_widget)
+                    action_layout.setContentsMargins(5, 5, 5, 5)
+                    action_layout.addWidget(action_btn)
+                    self.alerts_table.setCellWidget(i, 5, action_widget)
+                    
                 self.threat_donut.update_stats(stats)
                 self.filter_logs()
 

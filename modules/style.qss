@@ -442,8 +442,8 @@ QCheckBox#ProcessCheckBox {
 }
 
 QFrame#CardContainer {
-    background-color: #252526;
-    border: 1px solid #3e3e42;
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(45, 45, 48, 180), stop:1 rgba(30, 30, 35, 120));
+    border: 1px solid rgba(255, 255, 255, 30);
     border-radius: 12px;
 }
 

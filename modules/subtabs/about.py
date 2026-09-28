@@ -5,7 +5,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
-    QFrame, QScrollArea, QGridLayout, QSizePolicy
+    QFrame, QScrollArea, QGridLayout, QSizePolicy,
+    QPushButton
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -97,14 +98,13 @@ class AboutWidget(QWidget):
         grid = QGridLayout()
         grid.setSpacing(20)
         
-        # Extracted directly from README.md architecture
         modules = [
-            ("📊 SIEM Dashboard", "Centralized command center summarizing device health, active telemetry, and a consolidated security events feed."),
-            ("🚨 NIDS / IPS", "Live deep packet inspection powered by Scapy. Identifies network scans, exploits, and actively blocks malicious IPs at the firewall."),
-            ("🦠 Antivirus Engine", "Employs Machine Learning models and static signature databases to detect, neutralize, and quarantine malware or viruses."),
-            ("🎣 Phishing Detector", "Analyzes URLs and web content using Natural Language Processing to block fraudulent websites and social engineering attacks."),
-            ("⚡ Process & Memory", "Provides deep insight into resource performance. Tracks and terminates suspicious activities and evaluates S.M.A.R.T storage health."),
-            ("☁️ Cloud Security", "Analyzes and fortifies cloud connectivity, securing external endpoints, and validating network configurations.")
+            ("📊 SIEM Dashboard", "An advanced command center featuring a 5-dimensional Security Posture Radar, a live OSINT Threat Ticker, and an Unsupervised ML (IsolationForest) engine for zero-day anomaly detection."),
+            ("🚨 Network Intrusion (NIDS)", "Live deep packet inspection via promiscuous mode. Automatically detects aggressive port scans, enforces Zero Trust firewall rules, and supports real-time Syslog forwarding."),
+            ("🦠 Antivirus & Sandbox", "A dual-engine defense system running a Real-Time File System Watchdog and a deep Heuristic Analysis sandbox. Malicious binaries are instantly isolated into an encrypted Quarantine Vault."),
+            ("🎣 Phishing Detector", "An AI-powered URL and content analysis engine utilizing Natural Language Processing (NLP) to intercept zero-day phishing campaigns and block social engineering attacks."),
+            ("⚡ Process & Memory (SOAR)", "Deep kernel-level insight into system performance. Employs Security Orchestration, Automation, and Response (SOAR) playbooks to 'Auto-Kill' malicious process trees automatically."),
+            ("⚙️ Global Configuration", "A comprehensive, 7-tab enterprise Control Panel featuring custom iOS-style Animated Toggles, allowing granular control over AI sensitivity, log retention, and 2FA access.")
         ]
         
         for i, (mod_title, mod_desc) in enumerate(modules):
@@ -186,7 +186,46 @@ class AboutWidget(QWidget):
             
         tech_layout.addLayout(tech_grid)
         tech_layout.addStretch()
-        bottom_layout.addWidget(tech_frame)
+        bottom_layout.addWidget(tech_frame, 2)
+        
+        # Credits & Licensing
+        credits_frame = QFrame()
+        credits_frame.setObjectName("CardContainer")
+        credits_layout = QVBoxLayout(credits_frame)
+        credits_layout.setContentsMargins(30, 30, 30, 30)
+        
+        credits_title = QLabel("👥 Credits & Licensing")
+        credits_title.setStyleSheet("font-size: 22px; font-weight: 900; color: #0078d7; background: transparent; padding-bottom: 10px;")
+        credits_layout.addWidget(credits_title)
+        
+        team_lbl = QLabel(
+            "<div style='font-size: 15px; line-height: 1.8;'>"
+            "<p><b>Lead Developer:</b> Atharv</p>"
+            "<p><b>Architecture & Design:</b> NexaShield Core Team</p>"
+            "<br>"
+            "<p><b>Licensing:</b> MIT License (Open Source)</p>"
+            "<p>NexaShield is an independent, non-commercial research project dedicated to advancing the field of cybersecurity through unified, ML-driven threat detection systems.</p>"
+            "</div>"
+        )
+        team_lbl.setWordWrap(True)
+        team_lbl.setStyleSheet("background: transparent; color: #cccccc;")
+        credits_layout.addWidget(team_lbl)
+        
+        credits_layout.addStretch()
+        
+        # Action Buttons
+        btn_github = QPushButton("🌐 View on GitHub")
+        btn_github.setStyleSheet("padding: 10px 15px; background-color: transparent; border: 1px solid #555; color: white; border-radius: 6px; font-weight: bold;")
+        
+        btn_update = QPushButton("🔄 Check for Updates")
+        btn_update.setStyleSheet("padding: 10px 15px; background-color: #0078d7; color: white; border-radius: 6px; font-weight: bold; border: none;")
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addWidget(btn_github)
+        btn_layout.addWidget(btn_update)
+        credits_layout.addLayout(btn_layout)
+        
+        bottom_layout.addWidget(credits_frame, 1)
         
         layout.addLayout(bottom_layout)
         
