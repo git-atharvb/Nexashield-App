@@ -56,6 +56,7 @@ class AuthStyle(QWidget):
         self.theme_toggle.setFixedSize(40, 40)
         self.theme_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.theme_toggle.setObjectName("ThemeToggle")
+        self.theme_toggle.setToolTip("Toggle Theme (Dark / Light)")
         top_bar.addWidget(self.theme_toggle)
         self.main_layout.addLayout(top_bar)
 

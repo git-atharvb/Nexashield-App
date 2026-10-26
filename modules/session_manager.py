@@ -8,12 +8,15 @@ class SessionManager:
     Ensures Data Isolation between different users on the same OS.
     """
     def __init__(self, email_or_id, auth_type="local", auth_token=None):
-        self.user_id = email_or_id
+        import re
+        self.user_id = str(email_or_id).strip()
         self.auth_type = auth_type
         self.auth_token = auth_token
+        # Sanitize folder name for Windows filesystem compatibility (strip invalid chars < > : " / \ | ? *)
+        safe_folder = re.sub(r'[<>:"/\\|?*]', '_', self.user_id)
         # Define isolated workspace path: C:\Users\<OS_User>\AppData\Local\NexaShield\workspaces\<user_id>
         self.app_data_dir = os.path.join(os.path.expanduser("~"), "AppData", "Local", "NexaShield")
-        self.workspace_dir = os.path.join(self.app_data_dir, "workspaces", self.user_id)
+        self.workspace_dir = os.path.join(self.app_data_dir, "workspaces", safe_folder)
         
         # Ensure the tenant's workspace exists
         os.makedirs(self.workspace_dir, exist_ok=True)
@@ -27,8 +30,13 @@ class SessionManager:
     def _init_user_database(self):
         """Initializes the SQLite database structure for the isolated user."""
         db_path = self.get_db_path()
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30.0)
         cursor = conn.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL;")
+            cursor.execute("PRAGMA synchronous=NORMAL;")
+        except sqlite3.OperationalError:
+            pass
         
         # SIEM Tables
         cursor.execute("""

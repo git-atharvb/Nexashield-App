@@ -13,10 +13,9 @@ class SignupWindow(AuthStyle):
         self.is_password_strong = False
 
         # --- Logo Section ---
-        self.frame_layout.addSpacing(-30) 
         self.logo = GlowingLogo() 
         self.frame_layout.addWidget(self.logo, alignment=Qt.AlignmentFlag.AlignCenter)
-        self.frame_layout.addSpacing(20)
+        self.frame_layout.addSpacing(10)
 
         title = QLabel("Create Account")
         title.setObjectName("SignupTitle")
@@ -32,23 +31,27 @@ class SignupWindow(AuthStyle):
 
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Choose Username")
+        self.username_input.returnPressed.connect(self.handle_signup)
         self.frame_layout.addWidget(self.username_input)
 
         self.phone_input = QLineEdit()
-        self.phone_input.setPlaceholderText("Phone Number")
-        # Input Validation: Allow only digits
-        rx = QRegularExpression("^[0-9]*$")
+        self.phone_input.setPlaceholderText("Phone Number (Digits only)")
+        # Input Validation: Allow only digits, max 15
+        rx = QRegularExpression("^[0-9]{0,15}$")
         self.phone_input.setValidator(QRegularExpressionValidator(rx))
+        self.phone_input.returnPressed.connect(self.handle_signup)
         self.frame_layout.addWidget(self.phone_input)
 
         self.address_input = QLineEdit()
-        self.address_input.setPlaceholderText("Address")
+        self.address_input.setPlaceholderText("Address / Location")
+        self.address_input.returnPressed.connect(self.handle_signup)
         self.frame_layout.addWidget(self.address_input)
 
         # Replaced standard QLineEdit with custom PasswordInput
         self.password_input = PasswordInput("Choose Password")
         # Connect text change signal to strength checker
         self.password_input.line_edit.textChanged.connect(self.check_password_strength)
+        self.password_input.line_edit.returnPressed.connect(self.handle_signup)
         self.frame_layout.addWidget(self.password_input)
 
         # Password Strength Meter
@@ -69,8 +72,22 @@ class SignupWindow(AuthStyle):
 
         self.login_link = QPushButton("Back to Login")
         self.login_link.setObjectName("LinkButton")
-        self.login_link.clicked.connect(self.switch_to_login.emit)
+        self.login_link.clicked.connect(self.on_back_to_login)
         self.frame_layout.addWidget(self.login_link)
+
+    def on_back_to_login(self):
+        self.clear_inputs()
+        self.switch_to_login.emit()
+
+    def clear_inputs(self):
+        self.username_input.clear()
+        self.phone_input.clear()
+        self.address_input.clear()
+        self.password_input.line_edit.clear()
+        self.strength_bar.setValue(0)
+        self.strength_label.setText("Password Strength: None")
+        self.strength_label.setStyleSheet("")
+        self.is_password_strong = False
 
     def check_password_strength(self):
         password = self.password_input.text()
@@ -102,21 +119,26 @@ class SignupWindow(AuthStyle):
             self.is_password_strong = True
 
     def handle_signup(self):
-        username = self.username_input.text()
+        username = self.username_input.text().strip()
         password = self.password_input.text()
-        phone = self.phone_input.text()
-        address = self.address_input.text()
+        phone = self.phone_input.text().strip()
+        address = self.address_input.text().strip()
 
         if not all([username, password, phone, address]):
-            QMessageBox.warning(self, "Error", "Fields cannot be empty")
+            QMessageBox.warning(self, "Error", "All fields are required and cannot be empty.")
+            return
+
+        if len(phone) < 7:
+            QMessageBox.warning(self, "Invalid Phone", "Please enter a valid phone number (at least 7 digits).")
             return
 
         if not self.is_password_strong:
-            QMessageBox.warning(self, "Weak Password", "Please ensure your password meets all security requirements.")
+            QMessageBox.warning(self, "Weak Password", "Please ensure your password meets all security requirements (8+ chars, numbers, uppercase, special chars).")
             return
 
         if self.db.register_user(username, password, phone, address):
-            QMessageBox.information(self, "Success", "Account created! Logging you in...")
+            QMessageBox.information(self, "Success", "Account created successfully! Logging you in...")
+            self.clear_inputs()
             self.signup_success.emit(username, "local", "")
         else:
-            QMessageBox.warning(self, "Error", "Username already exists")
+            QMessageBox.warning(self, "Error", "Username already exists. Please choose another username.")

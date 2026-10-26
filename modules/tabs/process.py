@@ -363,7 +363,7 @@ class ProcessMonitorWidget(QWidget):
         self.btn_close_charts = QPushButton("✖")
         self.btn_close_charts.setFixedSize(24, 24)
         self.btn_close_charts.setToolTip("Close Graphs")
-        self.btn_close_charts.setStyleSheet("QPushButton { background-color: transparent; border: none; font-size: 18px; font-weight: bold; color: #a4b0be; } QPushButton:hover { color: #e74c3c; background-color: rgba(255, 255, 255, 0.1); border-radius: 4px; }")
+        self.btn_close_charts.setObjectName("BtnClosePanel")
         self.btn_close_charts.clicked.connect(lambda: self.btn_toggle_charts.setChecked(False))
         charts_header_layout.addWidget(self.btn_close_charts)
         
@@ -441,7 +441,7 @@ class ProcessMonitorWidget(QWidget):
         self.btn_close_details = QPushButton("✖")
         self.btn_close_details.setFixedSize(24, 24)
         self.btn_close_details.setToolTip("Close Forensics")
-        self.btn_close_details.setStyleSheet("QPushButton { background-color: transparent; border: none; font-size: 18px; font-weight: bold; color: #a4b0be; } QPushButton:hover { color: #e74c3c; background-color: rgba(255, 255, 255, 0.1); border-radius: 4px; }")
+        self.btn_close_details.setObjectName("BtnClosePanel")
         self.btn_close_details.clicked.connect(self.close_details_panel)
         details_header_layout.addWidget(self.btn_close_details)
         
@@ -462,13 +462,6 @@ class ProcessMonitorWidget(QWidget):
         # Status Bar / Footer
         self.status_bar = QFrame()
         self.status_bar.setObjectName("ProcessStatusBar")
-        self.status_bar.setStyleSheet("""
-            QFrame#ProcessStatusBar {
-                background-color: #1e1e2d;
-                border-top: 1px solid #2d2d3d;
-                border-radius: 6px;
-            }
-        """)
         status_layout = QHBoxLayout(self.status_bar)
         status_layout.setContentsMargins(15, 10, 15, 10)
         
@@ -479,7 +472,7 @@ class ProcessMonitorWidget(QWidget):
         status_layout.addStretch()
         
         self.lbl_global_cpu = QLabel("Global CPU:")
-        self.lbl_global_cpu.setStyleSheet("color: #a4b0be; font-weight: bold; font-size: 13px;")
+        self.lbl_global_cpu.setStyleSheet("font-weight: 600; font-size: 13px;")
         status_layout.addWidget(self.lbl_global_cpu)
         
         self.val_global_cpu = QLabel("0.0%")
@@ -489,7 +482,7 @@ class ProcessMonitorWidget(QWidget):
         status_layout.addSpacing(30)
         
         self.lbl_global_ram = QLabel("Global RAM:")
-        self.lbl_global_ram.setStyleSheet("color: #a4b0be; font-weight: bold; font-size: 13px;")
+        self.lbl_global_ram.setStyleSheet("font-weight: 600; font-size: 13px;")
         status_layout.addWidget(self.lbl_global_ram)
         
         self.val_global_ram = QLabel("0.0%")

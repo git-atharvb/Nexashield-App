@@ -4,8 +4,13 @@ import datetime
 
 class DatabaseManager:
     def __init__(self, db_name="nexashield.db"):
-        self.conn = sqlite3.connect(db_name)
+        self.conn = sqlite3.connect(db_name, check_same_thread=False, timeout=30.0)
         self.cursor = self.conn.cursor()
+        try:
+            self.cursor.execute("PRAGMA journal_mode=WAL;")
+            self.cursor.execute("PRAGMA synchronous=NORMAL;")
+        except sqlite3.OperationalError:
+            pass
         self.init_db()
 
     def init_db(self):
@@ -94,6 +99,11 @@ class DatabaseManager:
     def register_user(self, username, password, phone, address):
         """Register a new user with a hashed password."""
         try:
+            if not username or not password:
+                return False
+            username = str(username).strip()
+            phone = str(phone).strip() if phone else ""
+            address = str(address).strip() if address else ""
             hashed_pw = hashlib.sha256(password.encode()).hexdigest()
             self.cursor.execute("INSERT INTO users (username, password, phone, address) VALUES (?, ?, ?, ?)", 
                                 (username, hashed_pw, phone, address))
@@ -104,18 +114,27 @@ class DatabaseManager:
 
     def verify_user(self, username, password):
         """Verify user credentials."""
+        if not username or not password:
+            return False
+        username = str(username).strip()
         hashed_pw = hashlib.sha256(password.encode()).hexdigest()
         self.cursor.execute("SELECT * FROM users WHERE username=? AND password=?", (username, hashed_pw))
         return self.cursor.fetchone() is not None
 
     def get_user_phone(self, username):
         """Retrieve phone number for a user."""
+        if not username:
+            return None
+        username = str(username).strip()
         self.cursor.execute("SELECT phone FROM users WHERE username=?", (username,))
         result = self.cursor.fetchone()
         return result[0] if result else None
 
     def update_password(self, username, new_password):
         """Update user password."""
+        if not username or not new_password:
+            return False
+        username = str(username).strip()
         hashed_pw = hashlib.sha256(new_password.encode()).hexdigest()
         self.cursor.execute("UPDATE users SET password=? WHERE username=?", (hashed_pw, username))
         self.conn.commit()

@@ -45,7 +45,10 @@ class AnimatedToggle(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         # Draw background track
-        bg_color = QColor("#0078d7") if self._checked else QColor("#555555")
+        is_dark = self.palette().window().color().lightness() < 128
+        active_color = QColor("#0ea5e9") if is_dark else QColor("#0284c7")
+        inactive_color = QColor("#334155") if is_dark else QColor("#cbd5e1")
+        bg_color = active_color if self._checked else inactive_color
         painter.setBrush(QBrush(bg_color))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(0, 0, self.width(), self.height(), 13, 13)
@@ -78,29 +81,6 @@ class SettingsWidget(QWidget):
         self.sidebar = QListWidget()
         self.sidebar.setFixedWidth(220)
         self.sidebar.setObjectName("SettingsSidebar")
-        self.sidebar.setStyleSheet("""
-            QListWidget {
-                background-color: transparent;
-                border: none;
-                outline: none;
-            }
-            QListWidget::item {
-                padding: 12px 15px;
-                margin-bottom: 5px;
-                border-radius: 8px;
-                font-size: 14px;
-                font-weight: bold;
-                color: #8b949e;
-            }
-            QListWidget::item:selected {
-                background-color: rgba(0, 120, 215, 0.2);
-                color: #0078d7;
-                border-left: 4px solid #0078d7;
-            }
-            QListWidget::item:hover:!selected {
-                background-color: rgba(255, 255, 255, 0.05);
-            }
-        """)
         
         categories = [
             "🎨 Appearance", 
@@ -137,10 +117,10 @@ class SettingsWidget(QWidget):
         action_bar.addStretch()
         
         btn_reset = QPushButton("Restore Defaults")
-        btn_reset.setStyleSheet("padding: 8px 15px; border: 1px solid #555; border-radius: 6px; font-weight: bold; background: transparent;")
+        btn_reset.setObjectName("BtnSecondary")
         
         btn_save = QPushButton("Save Configuration")
-        btn_save.setStyleSheet("padding: 8px 15px; background-color: #0078d7; color: white; border-radius: 6px; font-weight: bold; border: none;")
+        btn_save.setObjectName("PrimaryBtn")
         
         action_bar.addWidget(btn_reset)
         action_bar.addWidget(btn_save)
@@ -350,16 +330,16 @@ class SettingsWidget(QWidget):
         layout.addWidget(card)
         
         danger_card = QFrame()
-        danger_card.setStyleSheet("QFrame { background-color: rgba(220, 53, 69, 0.1); border: 1px solid #dc3545; border-radius: 12px; }")
+        danger_card.setObjectName("DangerCard")
         danger_layout = QVBoxLayout(danger_card)
         danger_layout.setContentsMargins(20, 20, 20, 20)
         
         danger_lbl = QLabel("⚠️ Danger Zone")
-        danger_lbl.setStyleSheet("font-size: 18px; font-weight: bold; color: #dc3545; border: none; background: transparent;")
+        danger_lbl.setObjectName("StatusRed")
         danger_layout.addWidget(danger_lbl)
         
         btn_wipe = QPushButton("Clear Threat Logs")
-        btn_wipe.setStyleSheet("padding: 8px 15px; background-color: #dc3545; color: white; border-radius: 6px; font-weight: bold; border: none;")
+        btn_wipe.setObjectName("BtnDanger")
         danger_layout.addWidget(btn_wipe)
         
         layout.addWidget(danger_card)

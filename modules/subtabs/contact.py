@@ -83,10 +83,8 @@ class ContactWidget(QWidget):
             
             if isinstance(widget, QLineEdit):
                 widget.setMinimumHeight(42)
-                widget.setStyleSheet("QLineEdit { border: 1px solid #88888860; border-radius: 6px; padding: 0px 12px; font-size: 14px; background: rgba(128, 128, 128, 0.05); } QLineEdit:focus { border: 1px solid #0078d7; background: rgba(128, 128, 128, 0.08); }")
             elif isinstance(widget, QTextEdit):
                 widget.setMinimumHeight(160)
-                widget.setStyleSheet("QTextEdit { border: 1px solid #88888860; border-radius: 6px; padding: 12px; font-size: 14px; background: rgba(128, 128, 128, 0.05); } QTextEdit:focus { border: 1px solid #0078d7; background: rgba(128, 128, 128, 0.08); }")
                 
             field_layout.addWidget(widget)
             return field_layout
@@ -108,12 +106,7 @@ class ContactWidget(QWidget):
         self.submit_btn.setMinimumHeight(45)
         self.submit_btn.setFixedWidth(220)
         self.submit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.submit_btn.setObjectName("BtnPrimary")
-        self.submit_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 15px; font-weight: bold; border-radius: 8px;
-            }
-        """)
+        self.submit_btn.setObjectName("PrimaryBtn")
         self.submit_btn.clicked.connect(self.submit_form)
         
         btn_layout = QHBoxLayout()

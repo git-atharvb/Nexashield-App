@@ -208,17 +208,17 @@ class AboutWidget(QWidget):
             "</div>"
         )
         team_lbl.setWordWrap(True)
-        team_lbl.setStyleSheet("background: transparent; color: #cccccc;")
+        team_lbl.setStyleSheet("background: transparent;")
         credits_layout.addWidget(team_lbl)
         
         credits_layout.addStretch()
         
         # Action Buttons
         btn_github = QPushButton("🌐 View on GitHub")
-        btn_github.setStyleSheet("padding: 10px 15px; background-color: transparent; border: 1px solid #555; color: white; border-radius: 6px; font-weight: bold;")
+        btn_github.setObjectName("BtnSecondary")
         
         btn_update = QPushButton("🔄 Check for Updates")
-        btn_update.setStyleSheet("padding: 10px 15px; background-color: #0078d7; color: white; border-radius: 6px; font-weight: bold; border: none;")
+        btn_update.setObjectName("PrimaryBtn")
         
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(btn_github)

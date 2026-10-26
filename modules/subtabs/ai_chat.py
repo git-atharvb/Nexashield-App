@@ -145,7 +145,6 @@ class AiChatWidget(QWidget):
         sidebar = QFrame()
         sidebar.setObjectName("ChatSidebar")
         sidebar.setFixedWidth(240)
-        sidebar.setStyleSheet("QFrame#ChatSidebar { background-color: #1a1e24; border-right: 1px solid #2b323b; }")
         
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(15, 20, 15, 20)
@@ -157,22 +156,16 @@ class AiChatWidget(QWidget):
         sidebar_layout.addWidget(new_chat_btn)
         
         history_lbl = QLabel("Recent Chats")
-        history_lbl.setStyleSheet("color: #8b949e; font-size: 12px; font-weight: bold; margin-top: 15px;")
+        history_lbl.setObjectName("SidebarTitle")
         sidebar_layout.addWidget(history_lbl)
         
         self.session_list = QListWidget()
         self.session_list.setObjectName("ChatList")
-        self.session_list.setStyleSheet("""
-            QListWidget { background: transparent; border: none; outline: none; }
-            QListWidget::item { color: #c9d1d9; padding: 10px; border-radius: 5px; margin-bottom: 2px; }
-            QListWidget::item:selected { background-color: #2b323b; color: #00FFCC; font-weight: bold; }
-            QListWidget::item:hover:!selected { background-color: #21262d; }
-        """)
         self.session_list.itemClicked.connect(self.load_selected_session)
         sidebar_layout.addWidget(self.session_list)
         
         delete_chat_btn = QPushButton("🗑️ Delete Chat")
-        delete_chat_btn.setStyleSheet("QPushButton { background-color: #da3633; color: white; padding: 8px; border-radius: 4px; font-weight: bold; } QPushButton:hover { background-color: #f85149; }")
+        delete_chat_btn.setObjectName("BtnDanger")
         delete_chat_btn.clicked.connect(self.delete_current_session)
         sidebar_layout.addWidget(delete_chat_btn)
         
@@ -187,10 +180,10 @@ class AiChatWidget(QWidget):
         # Header
         header_layout = QHBoxLayout()
         title_lbl = QLabel("🤖 Nexa AI Assistant")
-        title_lbl.setStyleSheet("font-size: 20px; font-weight: bold; color: white;")
+        title_lbl.setObjectName("HeaderTitle")
         
         self.model_lbl = QLabel(f"Model: {self.current_model.split('/')[1]}")
-        self.model_lbl.setStyleSheet("color: #00FFCC; font-size: 12px; font-weight: bold; background: #161b22; padding: 5px 10px; border-radius: 10px; border: 1px solid #30363d;")
+        self.model_lbl.setObjectName("ModelBadge")
         
         header_layout.addWidget(title_lbl)
         header_layout.addStretch()
@@ -200,19 +193,12 @@ class AiChatWidget(QWidget):
         # Chat Display
         self.chat_display = QTextBrowser()
         self.chat_display.setOpenExternalLinks(True)
-        self.chat_display.setStyleSheet("""
-            QTextBrowser {
-                background-color: transparent;
-                border: none;
-                font-size: 14px;
-                color: #e6edf3;
-            }
-        """)
+        self.chat_display.setObjectName("ChatDisplay")
         main_area_layout.addWidget(self.chat_display)
         
         # Loading Indicator
         self.loading_lbl = QLabel("🤖 Nexa is analyzing your request...")
-        self.loading_lbl.setStyleSheet("color: #00FFCC; font-style: italic; font-size: 12px;")
+        self.loading_lbl.setStyleSheet("color: #0ea5e9; font-style: italic; font-size: 12px; font-weight: bold;")
         self.loading_lbl.hide()
         main_area_layout.addWidget(self.loading_lbl)
 
@@ -220,7 +206,6 @@ class AiChatWidget(QWidget):
         input_layout = QHBoxLayout()
         self.input_field = QLineEdit()
         self.input_field.setPlaceholderText("Ask Nexa about logs, firewall rules, or threat analysis...")
-        self.input_field.setStyleSheet("QLineEdit { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 12px; font-size: 14px; color: white; } QLineEdit:focus { border: 1px solid #00FFCC; }")
         self.input_field.returnPressed.connect(self.send_message)
         
         self.send_btn = QPushButton("Send")
@@ -296,18 +281,36 @@ class AiChatWidget(QWidget):
         """Builds a beautiful HTML bubble for the chat display."""
         parsed_text = parse_markdown(text) if not is_user else html.escape(text)
         
+        is_dark = self.palette().window().color().lightness() < 128
+        if is_dark:
+            user_bg = "#1e293b"
+            user_border = "#334155"
+            user_text = "#f8fafc"
+            user_meta = "#94a3b8"
+            ai_border = "#0ea5e9"
+            ai_text = "#e2e8f0"
+            ai_meta = "#38bdf8"
+        else:
+            user_bg = "#e2e8f0"
+            user_border = "#cbd5e1"
+            user_text = "#0f172a"
+            user_meta = "#64748b"
+            ai_border = "#0284c7"
+            ai_text = "#1e293b"
+            ai_meta = "#0284c7"
+        
         if is_user:
             html_bubble = f"""
-            <div style="margin: 10px 0px 10px 20%; padding: 12px 16px; background-color: #1f252e; border-radius: 8px; border: 1px solid #30363d;">
-                <span style="color: #8b949e; font-size: 11px; font-weight: bold; text-transform: uppercase;">{sender}</span><br/>
-                <span style="color: white; font-size: 14px;">{parsed_text}</span>
+            <div style="margin: 10px 0px 10px 20%; padding: 12px 16px; background-color: {user_bg}; border-radius: 8px; border: 1px solid {user_border};">
+                <span style="color: {user_meta}; font-size: 11px; font-weight: bold; text-transform: uppercase;">{sender}</span><br/>
+                <span style="color: {user_text}; font-size: 14px;">{parsed_text}</span>
             </div>
             """
         else:
             html_bubble = f"""
-            <div style="margin: 10px 20% 10px 0px; padding: 12px 16px; background-color: transparent; border-left: 3px solid #00FFCC;">
-                <span style="color: #00FFCC; font-size: 11px; font-weight: bold; text-transform: uppercase;">{sender}</span><br/>
-                <span style="color: #e6edf3; font-size: 14px;">{parsed_text}</span>
+            <div style="margin: 10px 20% 10px 0px; padding: 12px 16px; background-color: transparent; border-left: 3px solid {ai_border};">
+                <span style="color: {ai_meta}; font-size: 11px; font-weight: bold; text-transform: uppercase;">{sender}</span><br/>
+                <span style="color: {ai_text}; font-size: 14px;">{parsed_text}</span>
             </div>
             """
         self.chat_display.append(html_bubble)
@@ -358,11 +361,15 @@ class AiChatWidget(QWidget):
         
         # Prepare for streaming
         self.ai_response_buffer = ""
+        is_dark = self.palette().window().color().lightness() < 128
+        ai_border = "#0ea5e9" if is_dark else "#0284c7"
+        ai_meta = "#38bdf8" if is_dark else "#0284c7"
+        ai_text = "#e2e8f0" if is_dark else "#1e293b"
         # Create an empty bubble for the AI that we will update live
         self.chat_display.append(f"""
-            <div id="streaming_bubble" style="margin: 10px 20% 10px 0px; padding: 12px 16px; background-color: transparent; border-left: 3px solid #00FFCC;">
-                <span style="color: #00FFCC; font-size: 11px; font-weight: bold; text-transform: uppercase;">Nexa</span><br/>
-                <span id="streaming_text" style="color: #e6edf3; font-size: 14px;"></span>
+            <div id="streaming_bubble" style="margin: 10px 20% 10px 0px; padding: 12px 16px; background-color: transparent; border-left: 3px solid {ai_border};">
+                <span style="color: {ai_meta}; font-size: 11px; font-weight: bold; text-transform: uppercase;">Nexa</span><br/>
+                <span id="streaming_text" style="color: {ai_text}; font-size: 14px;"></span>
             </div>
         """)
         self.scroll_to_bottom()

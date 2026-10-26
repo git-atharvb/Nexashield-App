@@ -50,21 +50,25 @@ class LoginSuccessDialog(QDialog):
         self.setWindowOpacity(0.0)
         
         self.fade_in = QPropertyAnimation(self, b"windowOpacity")
-        self.fade_in.setDuration(500)
+        self.fade_in.setDuration(250)
         self.fade_in.setStartValue(0.0)
         self.fade_in.setEndValue(1.0)
         self.fade_in.setEasingCurve(QEasingCurve.Type.InOutQuad)
         
         self.fade_out = QPropertyAnimation(self, b"windowOpacity")
-        self.fade_out.setDuration(500)
+        self.fade_out.setDuration(250)
         self.fade_out.setStartValue(1.0)
         self.fade_out.setEndValue(0.0)
         self.fade_out.setEasingCurve(QEasingCurve.Type.InOutQuad)
         self.fade_out.finished.connect(self.accept)
 
-        # Sequence
+        # Sequence: Quick, elegant 1.1s total duration
         self.fade_in.start()
-        QTimer.singleShot(1500, self.fade_out.start)
+        QTimer.singleShot(600, self.fade_out.start)
+
+    def mousePressEvent(self, event):
+        # Click anywhere to immediately dismiss
+        self.accept()
 
 class LoadingSpinner(QWidget):
     """A simple rotating spinner widget."""
@@ -127,10 +131,12 @@ class LoginWindow(AuthStyle):
 
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Username")
+        self.username_input.returnPressed.connect(self.handle_login)
         self.frame_layout.addWidget(self.username_input)
 
         # Replaced standard QLineEdit with custom PasswordInput
         self.password_input = PasswordInput("Password")
+        self.password_input.line_edit.returnPressed.connect(self.handle_login)
         self.frame_layout.addWidget(self.password_input)
 
         self.login_btn = QPushButton("Login")
@@ -156,25 +162,35 @@ class LoginWindow(AuthStyle):
         self.frame_layout.addWidget(self.signup_link)
 
     def handle_login(self):
-        self.login_btn.setText("Logging in...")
-        self.login_btn.setEnabled(False)
+        username = self.username_input.text().strip()
+        password = self.password_input.text()
         
-        # Simulate processing delay for animation
-        QTimer.singleShot(1500, self.perform_login)
+        if not username or not password:
+            QMessageBox.warning(self, "Required Fields", "Please enter both username and password.")
+            return
+
+        self.login_btn.setText("Authenticating...")
+        self.login_btn.setEnabled(False)
+        self.google_btn.setEnabled(False)
+        
+        # Snappy 100ms yield for smooth UI feedback and immediate processing
+        QTimer.singleShot(100, self.perform_login)
 
     def perform_login(self):
-        username = self.username_input.text()
-        password = self.password_input.text()
+        try:
+            username = self.username_input.text().strip()
+            password = self.password_input.text()
 
-        self.login_btn.setText("Login")
-        self.login_btn.setEnabled(True)
-
-        if self.db.verify_user(username, password):
-            dlg = LoginSuccessDialog(self, username)
-            dlg.exec()
-            self.login_success.emit(username, "local", "")
-        else:
-            QMessageBox.warning(self, "Error", "Invalid username or password")
+            if self.db.verify_user(username, password):
+                dlg = LoginSuccessDialog(self, username)
+                dlg.exec()
+                self.login_success.emit(username, "local", "")
+            else:
+                QMessageBox.warning(self, "Authentication Failed", "Invalid username or password.")
+        finally:
+            self.login_btn.setText("Login")
+            self.login_btn.setEnabled(True)
+            self.google_btn.setEnabled(True)
 
     def handle_google_login(self):
         # Load credentials from client_secret.json
@@ -243,3 +259,7 @@ class LoginWindow(AuthStyle):
     def clear_inputs(self):
         self.username_input.clear()
         self.password_input.line_edit.clear()
+        self.login_btn.setText("Login")
+        self.login_btn.setEnabled(True)
+        self.google_btn.setEnabled(True)
+        self.google_btn.setText(" Sign in with Google")

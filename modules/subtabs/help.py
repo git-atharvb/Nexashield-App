@@ -115,41 +115,12 @@ class HelpWidget(QWidget):
         
         self.search_bar = QLineEdit()
         self.search_bar.setPlaceholderText("🔍 Search documentation...")
-        self.search_bar.setStyleSheet("""
-            QLineEdit {
-                padding: 10px;
-                border: 1px solid #333;
-                border-radius: 6px;
-                background-color: rgba(0, 0, 0, 0.2);
-                color: white;
-            }
-            QLineEdit:focus { border: 1px solid #0078d7; }
-        """)
         self.search_bar.textChanged.connect(self.filter_toc)
         toc_layout.addWidget(self.search_bar)
         
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
-        self.tree.setStyleSheet("""
-            QTreeWidget {
-                background-color: transparent;
-                border: none;
-                outline: none;
-            }
-            QTreeWidget::item {
-                padding: 8px;
-                border-radius: 5px;
-                color: #cccccc;
-                font-weight: bold;
-            }
-            QTreeWidget::item:selected {
-                background-color: rgba(0, 120, 215, 0.2);
-                color: #0078d7;
-            }
-            QTreeWidget::item:hover:!selected {
-                background-color: rgba(255, 255, 255, 0.05);
-            }
-        """)
+        self.tree.setObjectName("HelpTree")
         self.tree.itemSelectionChanged.connect(self.on_item_selected)
         
         self.populate_tree()
@@ -164,26 +135,18 @@ class HelpWidget(QWidget):
         content_layout.setContentsMargins(30, 20, 30, 20)
         
         self.lbl_breadcrumb = QLabel("📖 Home")
-        self.lbl_breadcrumb.setStyleSheet("color: #8b949e; font-weight: bold; font-size: 13px;")
+        self.lbl_breadcrumb.setObjectName("SidebarTitle")
         content_layout.addWidget(self.lbl_breadcrumb)
         
         # Separator line
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet("border: 1px solid #333; margin-top: 5px; margin-bottom: 10px;")
+        sep.setObjectName("DividerLine")
         content_layout.addWidget(sep)
         
         self.browser = QTextBrowser()
         self.browser.setOpenExternalLinks(True)
-        self.browser.setStyleSheet("""
-            QTextBrowser {
-                background-color: transparent;
-                border: none;
-                color: #e0e0e0;
-                font-size: 15px;
-                line-height: 1.6;
-            }
-        """)
+        self.browser.setStyleSheet("background-color: transparent; border: none;")
         
         content_layout.addWidget(self.browser)
         splitter.addWidget(content_frame)
@@ -264,18 +227,25 @@ class HelpWidget(QWidget):
         
         html_content = self.docs_database.get(topic, "<h1>⚠️ 404 - Document Not Found</h1><p>The requested documentation page is missing or under construction.</p>")
         
+        is_dark = self.palette().window().color().lightness() < 128
+        h1_color = "#f8fafc" if is_dark else "#0f172a"
+        h3_color = "#38bdf8" if is_dark else "#0284c7"
+        p_color = "#cbd5e1" if is_dark else "#334155"
+        code_bg = "rgba(14, 165, 233, 0.15)" if is_dark else "rgba(2, 132, 199, 0.1)"
+        code_color = "#38bdf8" if is_dark else "#0284c7"
+        
         # Wrap content in basic CSS for styling within QTextBrowser
         full_html = f"""
         <html>
         <head>
         <style>
             body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }}
-            h1 {{ color: #ffffff; font-size: 24px; margin-bottom: 20px; }}
-            h3 {{ color: #0078d7; font-size: 18px; margin-top: 25px; }}
-            p {{ color: #cccccc; margin-bottom: 12px; font-size: 14px; line-height: 1.6; }}
-            ul, ol {{ color: #cccccc; margin-bottom: 15px; margin-left: 20px; font-size: 14px; line-height: 1.6; }}
+            h1 {{ color: {h1_color}; font-size: 24px; margin-bottom: 20px; }}
+            h3 {{ color: {h3_color}; font-size: 18px; margin-top: 25px; }}
+            p {{ color: {p_color}; margin-bottom: 12px; font-size: 14px; line-height: 1.6; }}
+            ul, ol {{ color: {p_color}; margin-bottom: 15px; margin-left: 20px; font-size: 14px; line-height: 1.6; }}
             li {{ margin-bottom: 8px; }}
-            code {{ background-color: rgba(255,255,255,0.1); padding: 2px 5px; border-radius: 4px; font-family: monospace; color: #ffc107; }}
+            code {{ background-color: {code_bg}; padding: 2px 6px; border-radius: 4px; font-family: Consolas, monospace; color: {code_color}; }}
         </style>
         </head>
         <body>

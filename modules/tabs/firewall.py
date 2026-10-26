@@ -16,7 +16,6 @@ class AddRuleDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Add Firewall Rule")
         self.setMinimumSize(450, 400)
-        self.setStyleSheet("background-color: #2b2b2b; color: white;")
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -222,16 +221,18 @@ class FirewallWidget(QWidget):
         direction_layout.addWidget(self.lbl_inbound)
         from PyQt6.QtWidgets import QProgressBar
         self.prog_inbound = QProgressBar()
+        self.prog_inbound.setObjectName("InboundBar")
         self.prog_inbound.setTextVisible(False)
-        self.prog_inbound.setStyleSheet("QProgressBar { border-radius: 5px; background: #333; height: 10px; } QProgressBar::chunk { background-color: #0078d7; border-radius: 5px; }")
+        self.prog_inbound.setFixedHeight(8)
         direction_layout.addWidget(self.prog_inbound)
         
         # Outbound Bar
         self.lbl_outbound = QLabel("Outbound Rules: 0")
         direction_layout.addWidget(self.lbl_outbound)
         self.prog_outbound = QProgressBar()
+        self.prog_outbound.setObjectName("OutboundBar")
         self.prog_outbound.setTextVisible(False)
-        self.prog_outbound.setStyleSheet("QProgressBar { border-radius: 5px; background: #333; height: 10px; } QProgressBar::chunk { background-color: #e83e8c; border-radius: 5px; }")
+        self.prog_outbound.setFixedHeight(8)
         direction_layout.addWidget(self.prog_outbound)
         
         right_panel.addWidget(direction_box)

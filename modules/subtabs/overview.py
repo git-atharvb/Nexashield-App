@@ -74,9 +74,11 @@ class LiveThreatTicker(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(0, 0, self.width(), self.height(), QColor(30, 30, 30, 150))
-        painter.setPen(QColor("#ff4444"))
-        painter.setFont(QFont("Consolas", 11, QFont.Weight.Bold))
+        bg_col = self.palette().color(QPalette.ColorRole.Base)
+        tint = QColor(bg_col.red(), bg_col.green(), bg_col.blue(), 200)
+        painter.fillRect(0, 0, self.width(), self.height(), tint)
+        painter.setPen(QColor("#ef4444"))
+        painter.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
         painter.drawText(int(self.x_pos), 20, self.text)
 
 class ThreatRadarMap(QWidget):
@@ -627,6 +629,19 @@ class OverviewWidget(QWidget):
         # Timer for real-time updates
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_dashboard)
+        self.timer.start(2000)
+        QTimer.singleShot(150, self.update_dashboard)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if hasattr(self, 'timer') and not self.timer.isActive():
+            self.timer.start(2000)
+            self.update_dashboard()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, 'timer'):
+            self.timer.stop()
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -796,26 +811,7 @@ class OverviewWidget(QWidget):
         self.alerts_table.verticalHeader().setVisible(False)
         self.alerts_table.setShowGrid(False)
         
-        # Premium Styling
-        self.alerts_table.setStyleSheet("""
-            QTableWidget {
-                border: none;
-                background: transparent;
-                alternate-background-color: #2a2a2a;
-            }
-            QTableWidget::item {
-                padding: 10px;
-                border-bottom: 1px solid #333333;
-            }
-            QHeaderView::section {
-                background-color: #1e1e1e;
-                color: #aaa;
-                font-weight: bold;
-                border: none;
-                padding-bottom: 8px;
-                border-bottom: 2px solid #333;
-            }
-        """)
+        self.alerts_table.setObjectName("AlertsTable")
         self.alerts_table.setAlternatingRowColors(True)
         self.alerts_table.verticalHeader().setDefaultSectionSize(45)
         
@@ -1024,7 +1020,11 @@ class OverviewWidget(QWidget):
                     # MITRE Badge (using QLabel for styled badge)
                     mitre_lbl = QLabel(mitre_tactic)
                     mitre_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    mitre_lbl.setStyleSheet("background-color: #333333; color: #00e676; border-radius: 4px; padding: 2px 6px; font-size: 11px; font-weight: bold; border: 1px solid #444;")
+                    is_dark = self.palette().window().color().lightness() < 128
+                    mitre_bg = "#1e293b" if is_dark else "#e2e8f0"
+                    mitre_color = "#38bdf8" if is_dark else "#0284c7"
+                    mitre_border = "#334155" if is_dark else "#cbd5e1"
+                    mitre_lbl.setStyleSheet(f"background-color: {mitre_bg}; color: {mitre_color}; border-radius: 4px; padding: 2px 6px; font-size: 11px; font-weight: bold; border: 1px solid {mitre_border};")
                     mitre_widget = QWidget()
                     mitre_layout = QHBoxLayout(mitre_widget)
                     mitre_layout.setContentsMargins(5, 5, 5, 5)
@@ -1231,7 +1231,6 @@ class OverviewWidget(QWidget):
         desc = self.alerts_table.item(row, 2).text()
         
         menu = QMenu(self)
-        menu.setStyleSheet("QMenu { background-color: #2b2b2b; color: white; border: 1px solid #444; } QMenu::item:selected { background-color: #0078d7; }")
         
         details_act = menu.addAction("🔍 View Raw Details")
         copy_act = menu.addAction("📋 Copy Event Data")

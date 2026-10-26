@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QStackedWidget, QPushButton, QFrame, QMessageBox, QDialog
+    QLabel, QStackedWidget, QPushButton, QFrame, QMessageBox, QDialog, QApplication
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QPropertyAnimation, QEasingCurve, QTimer
 from tabs.process import ProcessMonitorWidget
@@ -50,25 +50,29 @@ class LogoutSuccessDialog(QDialog):
         
         layout.addWidget(container)
 
-        # Animation Setup
+        # Animation Setup (Snappy and responsive)
         self.setWindowOpacity(0.0)
         
         self.fade_in = QPropertyAnimation(self, b"windowOpacity")
-        self.fade_in.setDuration(500)
+        self.fade_in.setDuration(250)
         self.fade_in.setStartValue(0.0)
         self.fade_in.setEndValue(1.0)
         self.fade_in.setEasingCurve(QEasingCurve.Type.InOutQuad)
         
         self.fade_out = QPropertyAnimation(self, b"windowOpacity")
-        self.fade_out.setDuration(500)
+        self.fade_out.setDuration(250)
         self.fade_out.setStartValue(1.0)
         self.fade_out.setEndValue(0.0)
         self.fade_out.setEasingCurve(QEasingCurve.Type.InOutQuad)
         self.fade_out.finished.connect(self.accept)
 
-        # Sequence: Fade In -> Wait -> Fade Out
+        # Sequence: Fade In -> Brief Pause -> Fade Out
         self.fade_in.start()
-        QTimer.singleShot(1500, self.fade_out.start)
+        QTimer.singleShot(600, self.fade_out.start)
+
+    def mousePressEvent(self, event):
+        # Allow user to click to dismiss immediately
+        self.accept()
 
 class RefreshToastDialog(QDialog):
     """A non-blocking toast notification for refresh actions."""
@@ -137,27 +141,28 @@ class HomeWindow(QMainWindow):
         title.setObjectName("NavbarTitle")
         nav_layout.addWidget(title)
 
-        nav_layout.addStretch() # Push buttons to the right (or center if you prefer)
+        nav_layout.addStretch()
 
-        # Navigation Buttons
-        self.nav_buttons = []
-        self.modules = [
-            ("📊 SIEM", "SIEM Dashboard"),
-            ("⚡ Processes", "Process Management"),
-            ("🌐 Network", "Network Management"),
-            ("🧠 Memory", "Memory Analysis"),
-            ("🎣 Phishing", "Phishing Detector"),
-            ("🚨 NIDS", "Network Intrusion Detection System"),
-            ("🔥 Firewall", "Firewall Control"),
-            ("🛡️ Antivirus", "Antivirus Scanner"),
-            ("☁️ Cloud", "Cloud Security")
+        # Module definitions with lazy factory callables to avoid eager loading freeze
+        self.module_definitions = [
+            ("📊 SIEM", "SIEM Dashboard", lambda: SIEMDashboard(self.session)),
+            ("⚡ Processes", "Process Management", lambda: ProcessMonitorWidget(self.session)),
+            ("🌐 Network", "Network Management", lambda: NetworkMonitorWidget(self.session)),
+            ("🧠 Memory", "Memory Analysis", lambda: MemoryMonitorWidget(self.session)),
+            ("🎣 Phishing", "Phishing Detector", lambda: PhishingDetectorWidget(self.session)),
+            ("🚨 NIDS", "Network Intrusion Detection System", lambda: NIDSWidget(self.session)),
+            ("🔥 Firewall", "Firewall Control", lambda: FirewallWidget(self.session)),
+            ("🛡️ Antivirus", "Antivirus Scanner", lambda: AntivirusWidget(self.session)),
+            ("☁️ Cloud", "Cloud Security", lambda: CloudSecurityWidget(self.session))
         ]
 
-        for i, (btn_text, _) in enumerate(self.modules):
+        self.tab_instances = [None] * len(self.module_definitions)
+        self.nav_buttons = []
+
+        for i, (btn_text, _, _) in enumerate(self.module_definitions):
             btn = QPushButton(btn_text)
             btn.setObjectName("NavButton")
             btn.setCheckable(True)
-            # Use lambda with default argument to capture the current index 'i'
             btn.clicked.connect(lambda checked, idx=i: self.switch_tab(idx))
             nav_layout.addWidget(btn)
             self.nav_buttons.append(btn)
@@ -166,7 +171,8 @@ class HomeWindow(QMainWindow):
         self.refresh_btn = QPushButton("🔄")
         self.refresh_btn.setFixedSize(40, 40)
         self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.refresh_btn.setObjectName("ThemeToggle") # Reuse transparent styling
+        self.refresh_btn.setObjectName("IconButton")
+        self.refresh_btn.setToolTip("Refresh Current Tab")
         self.refresh_btn.clicked.connect(self.refresh_current_tab)
         nav_layout.addWidget(self.refresh_btn)
 
@@ -175,13 +181,17 @@ class HomeWindow(QMainWindow):
         self.theme_toggle.setFixedSize(40, 40)
         self.theme_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         self.theme_toggle.setObjectName("ThemeToggle")
+        self.theme_toggle.setToolTip("Toggle Theme (Dark / Light)")
         nav_layout.addWidget(self.theme_toggle)
 
         # Logout Button
-        logout_btn = QPushButton("Logout")
-        logout_btn.setObjectName("LogoutButton")
-        logout_btn.clicked.connect(self.confirm_logout)
-        nav_layout.addWidget(logout_btn)
+        self.logout_btn = QPushButton("Logout")
+        self.logout_btn.setFixedHeight(40)
+        self.logout_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.logout_btn.setObjectName("LogoutButton")
+        self.logout_btn.setToolTip("Sign Out of Session")
+        self.logout_btn.clicked.connect(self.confirm_logout)
+        nav_layout.addWidget(self.logout_btn)
 
         self.layout.addWidget(self.navbar)
 
@@ -189,24 +199,42 @@ class HomeWindow(QMainWindow):
         self.content_area = QStackedWidget()
         self.layout.addWidget(self.content_area)
 
-        # Inject SessionManager into all modules
-        self.content_area.addWidget(SIEMDashboard(self.session))
-        self.content_area.addWidget(ProcessMonitorWidget(self.session))
-        self.content_area.addWidget(NetworkMonitorWidget(self.session))
-        self.content_area.addWidget(MemoryMonitorWidget(self.session))
-        self.content_area.addWidget(PhishingDetectorWidget(self.session))
-        self.content_area.addWidget(NIDSWidget(self.session))
-        self.content_area.addWidget(FirewallWidget(self.session))
-        self.content_area.addWidget(AntivirusWidget(self.session))
-        self.content_area.addWidget(CloudSecurityWidget(self.session))
+        # Pre-populate stacked widget with placeholders for lazy-loaded tabs
+        for i, (_, label, _) in enumerate(self.module_definitions):
+            self.content_area.addWidget(self.create_placeholder(label))
 
-        # Set default selection
+        # Immediately activate Tab 0 (SIEM Dashboard) smoothly
         self.switch_tab(0)
 
     def switch_tab(self, index):
-        """Switches the stacked widget and updates button styles."""
+        """Switches the stacked widget and lazily loads tab widgets on demand."""
+        if index < 0 or index >= len(self.module_definitions):
+            return
+
         for i, btn in enumerate(self.nav_buttons):
             btn.setChecked(i == index)
+
+        # If this module hasn't been instantiated yet, construct it smoothly
+        if self.tab_instances[index] is None:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+            QApplication.processEvents()
+            try:
+                creator = self.module_definitions[index][2]
+                widget = creator()
+                self.tab_instances[index] = widget
+                
+                # Replace the placeholder widget
+                old_widget = self.content_area.widget(index)
+                self.content_area.removeWidget(old_widget)
+                if old_widget:
+                    old_widget.deleteLater()
+                self.content_area.insertWidget(index, widget)
+            except Exception as e:
+                print(f"[-] Error lazily loading tab {index}: {e}")
+            finally:
+                QApplication.restoreOverrideCursor()
+                QApplication.processEvents()
+
         self.content_area.setCurrentIndex(index)
 
     def refresh_current_tab(self):
@@ -233,12 +261,12 @@ class HomeWindow(QMainWindow):
 
     def create_placeholder(self, text):
         widget = QWidget()
-        layout = QVBoxLayout()
-        label = QLabel(f"{text} Module\n(Under Construction)")
+        layout = QVBoxLayout(widget)
+        label = QLabel(f"⚡ Loading {text}...")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setObjectName("PlaceholderLabel")
+        label.setStyleSheet("font-size: 16px; color: #888888; font-weight: bold;")
         layout.addWidget(label)
-        widget.setLayout(layout)
         return widget
 
     def confirm_logout(self):

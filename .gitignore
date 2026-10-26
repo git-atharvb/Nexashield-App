@@ -4,6 +4,9 @@ __pycache__/
 
 # Database
 nexashield.db
+*.db
+*.db-wal
+*.db-shm
 
 # Secrets - DO NOT PUSH
 client_secret.json

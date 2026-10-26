@@ -76,7 +76,6 @@ class FilesWidget(QWidget):
         left_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
         group_options = QGroupBox("Expert Capabilities")
-        group_options.setStyleSheet("QGroupBox { font-weight: bold; border: 1px solid #444; border-radius: 5px; margin-top: 10px;} QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 3px; }")
         opt_layout = QVBoxLayout(group_options)
         
         self.chk_backup = QCheckBox("Cloud Sync (Auto-Backup)")
@@ -102,7 +101,7 @@ class FilesWidget(QWidget):
         left_layout.addWidget(group_options)
         
         lbl_info = QLabel("All files are AES-encrypted at rest\nin this secure Zero-Trust Vault.")
-        lbl_info.setStyleSheet("color: #aaa; font-style: italic; font-size: 11px; margin-top: 10px; margin-bottom: 10px;")
+        lbl_info.setObjectName("SubtitleLabel")
         left_layout.addWidget(lbl_info)
         
         self.table = QTableWidget(0, 6)
@@ -127,7 +126,6 @@ class FilesWidget(QWidget):
         
         # In-App Previewer
         self.preview_box = QGroupBox("In-App Rich Previewer")
-        self.preview_box.setStyleSheet("border: 1px solid #444;")
         preview_layout = QVBoxLayout(self.preview_box)
         
         self.preview_stack = QStackedWidget()
@@ -135,7 +133,7 @@ class FilesWidget(QWidget):
         # 0: Text preview
         self.txt_preview = QTextEdit()
         self.txt_preview.setReadOnly(True)
-        self.txt_preview.setStyleSheet("background: #1e1e1e; font-family: monospace;")
+        self.txt_preview.setObjectName("CodePreview")
         self.txt_preview.setPlaceholderText("Select a file to safely decrypt and preview...")
         self.preview_stack.addWidget(self.txt_preview)
         

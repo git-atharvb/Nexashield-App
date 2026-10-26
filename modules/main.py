@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QStackedWidget
 )
 from PyQt6.QtGui import QIcon, QPalette, QColor
+from PyQt6.QtCore import Qt
 from database import DatabaseManager
 from login import LoginWindow
 from signup import SignupWindow
@@ -72,33 +73,49 @@ class NexaShieldApp(QMainWindow):
         self.setGeometry(x, y, w, h)
 
     def show_home(self, username, auth_type="local", auth_token=""):
-        # 1. Create the user's isolated workspace with auth context
-        self.session_manager = SessionManager(username, auth_type, auth_token)
-        
-        # 2. Destroy the old home screen to wipe all data/threads from RAM
-        if self.home_screen is not None:
-            self.stack.removeWidget(self.home_screen)
-            self.home_screen.deleteLater()
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
+        try:
+            # 1. Create the user's isolated workspace with auth context
+            self.session_manager = SessionManager(username, auth_type, auth_token)
             
-        # 3. Instantiate a fresh, isolated home screen
-        self.home_screen = HomeWindow(self.session_manager)
-        
-        # 4. Reconnect dynamic signals
-        self.home_screen.logout_requested.connect(self.handle_logout)
-        self.home_screen.theme_toggle.clicked.connect(self.toggle_theme)
-        self.home_screen.theme_toggle.setText("☀️" if self.is_dark_mode else "🌙")
-        
-        # 5. Add to stack and show
-        self.stack.addWidget(self.home_screen) # Automatically appends at end
-        
-        self.setWindowTitle(f"NexaShield Cybersecurity Suite : Welcome {username}")
-        self.stack.setCurrentWidget(self.home_screen)
-        self.showMaximized()
-        self.apply_theme()
+            # 2. Destroy the old home screen to wipe all data/threads from RAM
+            if self.home_screen is not None:
+                self.stack.removeWidget(self.home_screen)
+                self.home_screen.deleteLater()
+                self.home_screen = None
+                
+            # 3. Instantiate a fresh, isolated home screen
+            self.home_screen = HomeWindow(self.session_manager)
+            
+            # 4. Reconnect dynamic signals
+            self.home_screen.logout_requested.connect(self.handle_logout)
+            self.home_screen.theme_toggle.clicked.connect(self.toggle_theme)
+            self.home_screen.theme_toggle.setText("☀️" if self.is_dark_mode else "🌙")
+            
+            # 5. Add to stack and show
+            self.stack.addWidget(self.home_screen) # Automatically appends at end
+            
+            self.setWindowTitle(f"NexaShield Cybersecurity Suite : Welcome {username}")
+            self.stack.setCurrentWidget(self.home_screen)
+            self.showMaximized()
+            self.apply_theme()
+        finally:
+            QApplication.restoreOverrideCursor()
+            QApplication.processEvents()
 
     def handle_logout(self):
         self.setWindowTitle("NexaShield Cybersecurity Suite")
         self.login_screen.clear_inputs()
+        self.signup_screen.clear_inputs()
+        self.forgot_screen.reset_ui()
+        
+        # Clean up home screen resources on logout to release memory
+        if self.home_screen is not None:
+            self.stack.removeWidget(self.home_screen)
+            self.home_screen.deleteLater()
+            self.home_screen = None
+            
         self.stack.setCurrentIndex(0)
         self.showNormal()
         self.resize(550, 650)
@@ -122,21 +139,21 @@ class NexaShieldApp(QMainWindow):
         palette = QPalette()
         
         if self.is_dark_mode:
-            bg = "#1e1e1e"
-            base = "#252526"
-            text = "#ffffff"
-            text_muted = "#aaaaaa"
-            accent = "#0078d7"
-            accent_hover = "#0063b1"
-            border = "#3e3e42"
+            bg = "#0b0f17"          # Deep obsidian void
+            base = "#111726"        # Refined slate card surface
+            text = "#f8fafc"        # Crisp slate-50
+            text_muted = "#94a3b8"  # Slate-400
+            accent = "#0ea5e9"      # Vibrant cyber sky blue
+            accent_hover = "#38bdf8"# Luminous sky
+            border = "#1e293b"      # Sleek slate-800 divider
         else:
-            bg = "#f3f3f3"
-            base = "#ffffff"
-            text = "#111111"
-            text_muted = "#555555"
-            accent = "#0078d7"
-            accent_hover = "#005a9e"
-            border = "#cccccc"
+            bg = "#f8fafc"          # Ultra-clean slate-50
+            base = "#ffffff"        # Pure white elevated card
+            text = "#0f172a"        # Deep slate-900
+            text_muted = "#475569"  # Slate-600
+            accent = "#0284c7"      # Deep cobalt
+            accent_hover = "#0369a1"# Cobalt hover
+            border = "#e2e8f0"      # Crisp slate-200 border
 
         # 1. Apply Global Palette (Fixes custom paintEvent charts automatically)
         palette.setColor(QPalette.ColorRole.Window, QColor(bg))
@@ -158,6 +175,40 @@ class NexaShieldApp(QMainWindow):
         if os.path.exists(style_path):
             with open(style_path, "r") as f:
                 self.setStyleSheet(f.read())
+
+        # 3. Synchronize native Windows title bar color & dark mode (DWM)
+        self.update_titlebar_theme()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.update_titlebar_theme()
+
+    def update_titlebar_theme(self):
+        """Applies Windows Immersive Dark Mode and Caption Color to native titlebar."""
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import byref, c_int, sizeof
+
+                hwnd = int(self.winId())
+                if hwnd:
+                    val = c_int(1 if self.is_dark_mode else 0)
+                    # DWMWA_USE_IMMERSIVE_DARK_MODE (20 on Win11/Win10 20H1+, 19 on older builds)
+                    res = ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, byref(val), sizeof(val))
+                    if res != 0:
+                        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 19, byref(val), sizeof(val))
+
+                    # DWMWA_CAPTION_COLOR = 35 (Windows 11) - Color in BGR format: 0x00BBGGRR
+                    # Dark: #0b0f17 -> 0x00170F0B; Light: #f8fafc -> 0x00FCFAF8
+                    caption_col = c_int(0x00170F0B if self.is_dark_mode else 0x00FCFAF8)
+                    ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 35, byref(caption_col), sizeof(caption_col))
+
+                    # DWMWA_TEXT_COLOR = 36 (Windows 11)
+                    # Dark: #f8fafc -> 0x00FCFAF8; Light: #0f172a -> 0x002A170F
+                    text_col = c_int(0x00FCFAF8 if self.is_dark_mode else 0x002A170F)
+                    ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 36, byref(text_col), sizeof(text_col))
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

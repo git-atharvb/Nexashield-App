@@ -31,6 +31,7 @@ class ForgotPasswordWindow(AuthStyle):
         # --- STEP 1: Username Input ---
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Enter Username")
+        self.username_input.returnPressed.connect(self.handle_send_otp)
         self.frame_layout.addWidget(self.username_input)
 
         self.send_otp_btn = QPushButton("Send OTP")
@@ -41,10 +42,12 @@ class ForgotPasswordWindow(AuthStyle):
         # --- STEP 2: OTP & New Password (Hidden initially) ---
         self.otp_input = QLineEdit()
         self.otp_input.setPlaceholderText("Enter 6-digit OTP")
+        self.otp_input.returnPressed.connect(self.handle_reset_password)
         self.otp_input.hide()
         self.frame_layout.addWidget(self.otp_input)
 
         self.new_password_input = PasswordInput("New Password")
+        self.new_password_input.line_edit.returnPressed.connect(self.handle_reset_password)
         self.new_password_input.hide()
         self.frame_layout.addWidget(self.new_password_input)
 
@@ -57,11 +60,15 @@ class ForgotPasswordWindow(AuthStyle):
         # Back Button
         self.back_btn = QPushButton("Back to Login")
         self.back_btn.setObjectName("LinkButton")
-        self.back_btn.clicked.connect(self.switch_to_login.emit)
+        self.back_btn.clicked.connect(self.on_back_to_login)
         self.frame_layout.addWidget(self.back_btn)
 
+    def on_back_to_login(self):
+        self.reset_ui()
+        self.switch_to_login.emit()
+
     def handle_send_otp(self):
-        username = self.username_input.text()
+        username = self.username_input.text().strip()
         if not username:
             QMessageBox.warning(self, "Error", "Please enter your username.")
             return
@@ -90,21 +97,20 @@ class ForgotPasswordWindow(AuthStyle):
         self.reset_btn.show()
 
     def handle_reset_password(self):
-        otp = self.otp_input.text()
+        otp = self.otp_input.text().strip()
         new_pw = self.new_password_input.text()
 
         if otp != self.generated_otp:
-            QMessageBox.warning(self, "Error", "Invalid OTP.")
+            QMessageBox.warning(self, "Error", "Invalid OTP. Please check the 6-digit code.")
             return
         
-        if not new_pw:
-            QMessageBox.warning(self, "Error", "Enter a new password.")
+        if not new_pw or len(new_pw) < 8:
+            QMessageBox.warning(self, "Error", "New password must be at least 8 characters.")
             return
 
         if self.db.update_password(self.current_username, new_pw):
-            QMessageBox.information(self, "Success", "Password reset successfully.")
-            self.switch_to_login.emit()
-            self.reset_ui()
+            QMessageBox.information(self, "Success", "Password reset successfully! Please log in with your new password.")
+            self.on_back_to_login()
         else:
             QMessageBox.critical(self, "Error", "Failed to update password.")
 

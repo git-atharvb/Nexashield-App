@@ -15,18 +15,16 @@ class DLPReportDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"Advanced Analysis Report: {filename}")
         self.resize(600, 450)
-        self.setStyleSheet("background-color: #1e1e1e; color: white;")
         
         layout = QVBoxLayout(self)
         
         title = QLabel(f"DLP Expert Analysis\nFile: {filename}")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #0078d7;")
+        title.setObjectName("DialogTitle")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
         self.text_area = QTextEdit()
         self.text_area.setReadOnly(True)
-        self.text_area.setStyleSheet("background-color: #2b2b2b; border: 1px solid #444; padding: 10px; font-size: 14px;")
         
         html_report = "<h3>Identified Sensitive Data</h3><ul>"
         if not raw_findings:
@@ -299,7 +297,6 @@ class CloudSecurityWidget(QWidget):
 
     def show_context_menu(self, pos):
         menu = QMenu(self)
-        menu.setStyleSheet("QMenu { background-color: #2b2b2b; color: white; border: 1px solid #444; } QMenu::item:selected { background-color: #0078d7; }")
         view_action = QAction("View Full Report", self)
         view_action.triggered.connect(lambda: self.show_report(self.table.currentItem()))
         menu.addAction(view_action)
@@ -402,15 +399,16 @@ class CloudSecurityWidget(QWidget):
 
     def _create_stat_card(self, title, value, value_color):
         card = QFrame()
-        card.setStyleSheet("background-color: #252526; border-radius: 8px; padding: 15px;")
+        card.setObjectName("CardContainer")
         layout = QVBoxLayout(card)
+        layout.setContentsMargins(15, 15, 15, 15)
         
         title_lbl = QLabel(title)
-        title_lbl.setStyleSheet("color: #aaaaaa; font-size: 14px; font-weight: bold;")
+        title_lbl.setObjectName("SidebarTitle")
         title_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         val_lbl = QLabel(value)
-        val_lbl.setStyleSheet(f"color: {value_color}; font-size: 28px; font-weight: bold;")
+        val_lbl.setStyleSheet(f"color: {value_color}; font-size: 28px; font-weight: bold; background: transparent;")
         val_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         layout.addWidget(title_lbl)
