@@ -6,23 +6,34 @@ import datetime
 import math
 import subprocess
 import platform
+import ctypes
 from collections import deque
+
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, 
-    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, 
-    QFrame, QCheckBox, QFileDialog, QMessageBox, QSizePolicy, 
-    QAbstractItemView, QGroupBox, QTabWidget, QToolTip, QScrollArea
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel,
+    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
+    QFrame, QCheckBox, QFileDialog, QMessageBox, QSizePolicy,
+    QAbstractItemView, QTabWidget, QToolTip, QLineEdit, QProgressBar,
+    QApplication
 )
-from PyQt6.QtCore import Qt, QTimer, QRectF, QBuffer, QIODevice, QByteArray, QSize, QThread, pyqtSignal
+from PyQt6.QtCore import (
+    Qt, QTimer, QRectF, QSize, QThread, pyqtSignal, QBuffer,
+    QIODevice, QSizeF
+)
 from PyQt6.QtGui import (
-    QColor, QPainter, QPainterPath, QLinearGradient, QPen, QFont, 
-    QTextDocument, QBrush, QPalette, QIcon
+    QColor, QPainter, QPainterPath, QLinearGradient, QRadialGradient,
+    QPen, QFont, QTextDocument, QBrush, QPalette, QPageSize
 )
 from PyQt6.QtPrintSupport import QPrinter
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from database import DatabaseManager
+
+# --- Background Workers ---
+
 class TempCleanerWorker(QThread):
     """Cleans temporary files recursively in a background thread to prevent UI lockup."""
-    finished_clean = pyqtSignal(int, int) # count, freed
+    finished_clean = pyqtSignal(int, int)  # count, freed_bytes
 
     def run(self):
         temp_dir = os.environ.get('TEMP') or '/tmp'
@@ -36,13 +47,40 @@ class TempCleanerWorker(QThread):
                     os.remove(p)
                     freed += s
                     count += 1
-                except: pass
+                except Exception:
+                    pass
         self.finished_clean.emit(count, freed)
 
+class MemoryOptimizerWorker(QThread):
+    """Trims unreferenced process working sets on Windows to release standby physical memory."""
+    finished_trim = pyqtSignal(int)
+
+    def run(self):
+        trimmed_count = 0
+        if os.name == 'nt':
+            try:
+                kernel32 = ctypes.windll.kernel32
+                psapi = ctypes.windll.psapi
+                for proc in psutil.process_iter(['pid']):
+                    try:
+                        pid = proc.info['pid']
+                        if pid <= 4:
+                            continue
+                        h = kernel32.OpenProcess(0x0500, False, pid)
+                        if h:
+                            if psapi.EmptyWorkingSet(h):
+                                trimmed_count += 1
+                            kernel32.CloseHandle(h)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        self.finished_trim.emit(trimmed_count)
+
 class MemoryWorker(QThread):
-    """Asynchronously gathers all memory, disk partitions, and top-processes data."""
+    """Asynchronously gathers all memory, swap, disk partitions, and top-processes data."""
     data_fetched = pyqtSignal(dict)
-    
+
     def __init__(self, prev_disk_io, last_io_time, smart_cache, smart_last_check, boot_time):
         super().__init__()
         self.prev_disk_io = prev_disk_io
@@ -56,11 +94,12 @@ class MemoryWorker(QThread):
         try:
             data['mem'] = psutil.virtual_memory()
             data['swap'] = psutil.swap_memory()
-        except: pass
-        
+        except Exception:
+            pass
+
         data['cpu'] = psutil.cpu_percent(interval=None)
         data['uptime'] = str(datetime.datetime.now() - self.boot_time).split('.')[0]
-        
+
         try:
             curr_io = psutil.disk_io_counters()
             curr_time = time.time()
@@ -73,8 +112,9 @@ class MemoryWorker(QThread):
                     data['w_speed'] = (curr_io.write_bytes - self.prev_disk_io.write_bytes) / delta
             data['new_disk_io'] = curr_io
             data['new_last_io_time'] = curr_time
-        except: pass
-        
+        except Exception:
+            pass
+
         curr_time = time.time()
         if curr_time - self.smart_last_check >= 60:
             self.smart_last_check = curr_time
@@ -88,46 +128,67 @@ class MemoryWorker(QThread):
                         parts = line.split()
                         if len(parts) >= 2:
                             self.smart_cache[parts[0]] = "Good" if parts[1] == "OK" else "Warning"
-                except: pass
+                except Exception:
+                    pass
         data['smart_cache'] = self.smart_cache
         data['smart_last_check'] = self.smart_last_check
-        
+
         parts_data = []
         try:
             for part in psutil.disk_partitions():
                 try:
                     usage = psutil.disk_usage(part.mountpoint)
-                    parts_data.append({'mountpoint': part.mountpoint, 'total': usage.total, 'free': usage.free, 'percent': usage.percent, 'fstype': part.fstype})
-                except: continue
+                    parts_data.append({
+                        'mountpoint': part.mountpoint,
+                        'total': usage.total,
+                        'free': usage.free,
+                        'percent': usage.percent,
+                        'fstype': part.fstype
+                    })
+                except Exception:
+                    continue
             data['partitions'] = parts_data
-        except: pass
+        except Exception:
+            pass
 
         try:
-            procs = sorted(psutil.process_iter(['pid', 'name', 'memory_info']), key=lambda p: p.info['memory_info'].rss, reverse=True)[:5]
-            data['procs'] = [{'pid': p.info['pid'], 'name': p.info['name'], 'rss': p.info['memory_info'].rss} for p in procs]
-        except: pass
-        
+            procs = sorted(
+                psutil.process_iter(['pid', 'name', 'memory_info']),
+                key=lambda p: (p.info['memory_info'].rss if p.info.get('memory_info') else 0),
+                reverse=True
+            )[:18]
+            data['procs'] = [{
+                'pid': p.info['pid'],
+                'name': p.info['name'] or 'Unknown',
+                'rss': p.info['memory_info'].rss if p.info.get('memory_info') else 0
+            } for p in procs]
+        except Exception:
+            pass
+
         self.data_fetched.emit(data)
 
-# --- Custom UI Components ---
+
+# --- Custom Interactive Cyber Visual Widgets ---
 
 class ModernChart(QWidget):
-    """Draws a live line chart with a modern gradient look."""
-    def __init__(self, title, color="#0078d7", max_value=100.0, auto_scale=False, suffix="%"):
+    """Draws a live telemetry curve with cyber gradient fill and peak watermark."""
+    def __init__(self, title, color="#0ea5e9", max_value=100.0, auto_scale=False, suffix="%"):
         super().__init__()
         self.title = title
         self.base_color = color
-        self.data = deque([0]*60, maxlen=60)
-        self.setMinimumHeight(120)
+        self.data = deque([0.0] * 60, maxlen=60)
         self.current_value = 0.0
         self.max_value = max_value
         self.auto_scale = auto_scale
         self.suffix = suffix
+        self.peak_value = 0.0
 
     def update_value(self, value):
         self.current_value = value
         self.data.append(value)
-        
+        if value > self.peak_value:
+            self.peak_value = value
+
         if self.auto_scale:
             local_max = max(self.data) if self.data else 1.0
             if local_max > self.max_value:
@@ -139,7 +200,6 @@ class ModernChart(QWidget):
     def _format_val(self, val):
         if self.suffix == "%":
             return f"{val:.1f}%"
-        # Byte formatting
         n = val
         for unit in ["B", "KB", "MB", "GB"]:
             if abs(n) < 1024.0:
@@ -151,137 +211,107 @@ class ModernChart(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        
-        # Dynamic Colors
+
+        is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        bg_col = QColor("#0e1422") if is_dark else QColor("#ffffff")
+        bdr_col = QColor("#1e293b") if is_dark else QColor("#e2e8f0")
         text_color = self.palette().color(QPalette.ColorRole.WindowText)
         line_color = QColor(self.base_color)
 
-        # Background (Transparent/Handled by parent Card)
-        
-        top_pad = 40
-        chart_h = h - top_pad
-        
-        grid_col = QColor(128, 128, 128, 40)
-        # 1. Draw Grid Lines (underneath)
+        painter.fillRect(0, 0, w, h, bg_col)
+        painter.setPen(QPen(bdr_col, 1))
+        painter.drawRect(0, 0, w - 1, h - 1)
+
+        top_pad = 28
+        bottom_pad = 18
+        chart_h = max(10, h - top_pad - bottom_pad)
+
+        # Subtle grid lines
+        grid_col = QColor(148, 163, 184, 30 if is_dark else 60)
         painter.setPen(QPen(grid_col, 1, Qt.PenStyle.DashLine))
         for i in range(3):
             y_line = top_pad + i * (chart_h / 2)
             painter.drawLine(0, int(y_line), w, int(y_line))
 
-        if not self.data: return
+        if not self.data:
+            return
 
-        # Draw Graph
+        # Build Curve Path
         path = QPainterPath()
         step_x = w / (self.data.maxlen - 1)
         scale = max(self.max_value, 1.0)
-        
-        path.moveTo(0, h - (self.data[0] / scale * chart_h))
-        
+
+        prev_x = 0
+        prev_y = h - bottom_pad - (self.data[0] / scale * chart_h)
+        path.moveTo(prev_x, prev_y)
+
         for i, val in enumerate(self.data):
             x = i * step_x
-            y = h - (val / scale * chart_h)
+            y = h - bottom_pad - (val / scale * chart_h)
             path.lineTo(x, y)
+            prev_x, prev_y = x, y
 
-        # Stroke
+        # Stroke Line
         painter.setPen(QPen(line_color, 2))
         painter.drawPath(path)
 
-        # Fill Gradient
-        path.lineTo(w, h)
-        path.lineTo(0, h)
+        # Gradient Fill Beneath Curve
+        path.lineTo(w, h - bottom_pad)
+        path.lineTo(0, h - bottom_pad)
         path.closeSubpath()
-        grad = QLinearGradient(0, top_pad, 0, h)
+        grad = QLinearGradient(0, top_pad, 0, h - bottom_pad)
         c = line_color
-        grad.setColorAt(0, QColor(c.red(), c.green(), c.blue(), 80))
+        grad.setColorAt(0, QColor(c.red(), c.green(), c.blue(), 110 if is_dark else 70))
         grad.setColorAt(1, QColor(c.red(), c.green(), c.blue(), 0))
         painter.setBrush(grad)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawPath(path)
 
-        # Leading Dot
-        painter.setBrush(line_color)
-        painter.drawEllipse(int(w - 4), int(y - 4), 8, 8)
-        
-        # 3. Draw Text & Labels (On Top)
-        painter.setFont(QFont("Segoe UI", 8))
-        painter.setPen(QColor(128, 128, 128, 200))
-        for i in range(3):
-            y_line = top_pad + i * (chart_h / 2)
-            val = self.max_value * (1 - i*0.5) if i != 2 else 0
-            painter.drawText(10, int(y_line) - 4, self._format_val(val))
-            
-        # Title & Value
+        # Leading Glow Dot
+        glow = QRadialGradient(prev_x, prev_y, 12)
+        glow.setColorAt(0, QColor(c.red(), c.green(), c.blue(), 160))
+        glow.setColorAt(1, Qt.GlobalColor.transparent)
+        painter.setBrush(glow)
+        painter.drawEllipse(int(prev_x - 12), int(prev_y - 12), 24, 24)
+        painter.setBrush(c)
+        painter.setPen(QPen(Qt.GlobalColor.white, 1.5))
+        painter.drawEllipse(int(prev_x - 3), int(prev_y - 3), 6, 6)
+
+        # Title & Value Readout
         painter.setPen(text_color)
+        painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        painter.drawText(8, 18, self.title)
+
+        cur_text = self._format_val(self.current_value)
         painter.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        painter.drawText(10, 25, f"{self.title}")
-        
         painter.setPen(line_color)
-        painter.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        painter.drawText(w - 100, 25, 90, 20, Qt.AlignmentFlag.AlignRight, self._format_val(self.current_value))
+        val_w = painter.fontMetrics().horizontalAdvance(cur_text)
+        painter.drawText(w - val_w - 10, 18, cur_text)
 
-class DonutChart(QWidget):
-    """Draws a donut chart for percentage visualization."""
-    def __init__(self, title, color="#28a745"):
-        super().__init__()
-        self.title = title
-        self.primary_color = QColor(color)
-        self.bg_color = QColor(0, 0, 0, 50) # Semi-transparent black
-        self.percent = 0.0
-        self.setMinimumSize(140, 160)
+        # Peak Watermark
+        painter.setFont(QFont("Segoe UI", 8))
+        painter.setPen(QColor(148, 163, 184, 160))
+        painter.drawText(8, h - 5, f"Peak: {self._format_val(self.peak_value)}")
 
-    def update_value(self, percent):
-        self.percent = percent
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        
-        # Layout calculations to prevent overlap
-        header_h = 30
-        size = min(w, h - header_h) - 10
-        rect = QRectF((w - size)/2, header_h + 10, size, size)
-
-        # Title
-        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
-        painter.setFont(QFont("Segoe UI", 9))
-        painter.drawText(QRectF(0, 0, w, header_h), Qt.AlignmentFlag.AlignCenter, self.title)
-
-        # Background Circle
-        pen = QPen(self.bg_color, 8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        painter.drawArc(rect, 0, 360 * 16)
-
-        # Value Arc
-        pen.setColor(self.primary_color)
-        painter.setPen(pen)
-        span = int(-self.percent * 3.6 * 16)
-        painter.drawArc(rect, 90 * 16, span)
-
-        # Text in center
-        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
-        painter.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{self.percent:.1f}%")
 
 class DiskPartitionPieChart(QWidget):
-    """Pie chart to visualize disk partition division."""
+    """Compact interactive donut chart displaying disk partition distribution."""
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(200, 180)
-        self.partitions = [] # List of (name, value, color)
+        self.setMinimumSize(125, 125)
+        self.partitions = []
         self.colors = [
-            QColor("#0078d7"), QColor("#28a745"), QColor("#ffc107"), 
-            QColor("#dc3545"), QColor("#6f42c1"), QColor("#17a2b8")
+            QColor("#0ea5e9"), QColor("#10b981"), QColor("#f59e0b"),
+            QColor("#ec4899"), QColor("#8b5cf6"), QColor("#06b6d4")
         ]
         self.setMouseTracking(True)
 
     def update_data(self, partition_data):
-        # partition_data: list of (name, size_bytes)
         self.partitions = []
         total = sum(p[1] for p in partition_data)
-        if total == 0: return
-        
+        if total == 0:
+            self.update()
+            return
         for i, (name, size) in enumerate(partition_data):
             color = self.colors[i % len(self.colors)]
             self.partitions.append((name, size, color))
@@ -291,167 +321,99 @@ class DiskPartitionPieChart(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        
-        # Title
-        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
-        painter.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        painter.drawText(QRectF(0, 0, w, 20), Qt.AlignmentFlag.AlignLeft, "Disk Division (Total Size)")
+
+        is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        bg_col = QColor("#0e1422") if is_dark else QColor("#ffffff")
+        text_col = self.palette().color(QPalette.ColorRole.WindowText)
+
+        # Header
+        painter.setPen(text_col)
+        painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        painter.drawText(QRectF(0, 0, w, 15), Qt.AlignmentFlag.AlignCenter, "Disk Distribution")
 
         if not self.partitions:
             return
 
-        # Donut Area
-        top_pad = 35
-        bottom_pad = 25
-        size = min(w, h - top_pad - bottom_pad) - 10
-        rect = QRectF((w - size) / 2, top_pad, size, size)
-        
+        size = min(w - 10, h - 34)
+        if size <= 10:
+            return
+        rect = QRectF((w - size) / 2, 17, size, size)
+
         total = sum(p[1] for p in self.partitions)
         start_angle = 90 * 16
-        
+
         for name, val, color in self.partitions:
             span = int((val / total) * 360 * 16)
             painter.setBrush(color)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawPie(rect, start_angle, span)
             start_angle += span
-            
-        # Inner Donut Hole
-        painter.setBrush(self.palette().color(QPalette.ColorRole.Window))
-        inner_size = size * 0.55
-        inner_rect = QRectF((w - inner_size) / 2, top_pad + (size - inner_size) / 2, inner_size, inner_size)
+
+        # Donut Inner Hole
+        inner_size = size * 0.60
+        inner_rect = QRectF((w - inner_size) / 2, 17 + (size - inner_size) / 2, inner_size, inner_size)
+        painter.setBrush(bg_col)
         painter.drawEllipse(inner_rect)
 
-        # Legend (Simple text at bottom)
-        legend_y = h - 10
+        # Legend snippet at bottom with proper padding
+        legend_y = h - 3
         painter.setFont(QFont("Segoe UI", 8))
-        
-        # Draw legend items horizontally
-        x_cursor = 10
+        x_c = 6
         for name, val, color in self.partitions:
             painter.setBrush(color)
-            painter.drawEllipse(x_cursor, legend_y - 8, 8, 8)
-            
-            painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
-            text = f"{name}"
-            painter.drawText(x_cursor + 12, legend_y, text)
-            
-            fm = painter.fontMetrics()
-            x_cursor += 12 + fm.horizontalAdvance(text) + 10
-            if x_cursor > w - 20: break # Stop if overflow
-
-    def _format_bytes(self, size):
-        for unit in ["B", "KB", "MB", "GB", "TB"]:
-            if size < 1024.0:
-                return f"{size:.2f} {unit}"
-            size /= 1024.0
-        return f"{size:.2f} PB"
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(x_c, legend_y - 8, 7, 7)
+            painter.setPen(text_col)
+            txt = f"{name}"
+            painter.drawText(x_c + 10, legend_y, txt)
+            x_c += 10 + painter.fontMetrics().horizontalAdvance(txt) + 8
+            if x_c > w - 10:
+                break
 
     def mouseMoveEvent(self, event):
         if not self.partitions:
             return super().mouseMoveEvent(event)
-            
         pos = event.pos()
         w, h = self.width(), self.height()
-        top_pad = 35
-        bottom_pad = 25
-        size = min(w, h - top_pad - bottom_pad) - 10
-        rect = QRectF((w - size) / 2, top_pad, size, size)
-        
+        size = min(w - 10, h - 34)
+        rect = QRectF((w - size) / 2, 17, size, size)
         center = rect.center()
         dx = pos.x() - center.x()
         dy = pos.y() - center.y()
         distance = math.hypot(dx, dy)
-        
-        inner_radius = (size * 0.55) / 2
+
+        inner_radius = (size * 0.60) / 2
         outer_radius = size / 2
-        
+
         if inner_radius <= distance <= outer_radius:
             angle = math.degrees(math.atan2(-dy, dx))
             if angle < 0:
                 angle += 360
-            mapped_angle = (angle - 90) % 360
-            
+            mapped = (angle - 90) % 360
             total = sum(p[1] for p in self.partitions)
             if total > 0:
-                current_span = 0
+                cur = 0
                 for name, val, color in self.partitions:
                     span = (val / total) * 360
-                    if current_span <= mapped_angle <= current_span + span:
-                        QToolTip.showText(event.globalPosition().toPoint(), f"{name}\nCapacity: {self._format_bytes(val)}\nShare: {(val/total)*100:.1f}%", self)
+                    if cur <= mapped <= cur + span:
+                        pct = (val / total) * 100
+                        cap_gb = val / (1024**3)
+                        QToolTip.showText(
+                            event.globalPosition().toPoint(),
+                            f"<b>{name}</b><br>Capacity: {cap_gb:.1f} GB<br>Share: {pct:.1f}%",
+                            self
+                        )
                         return
-                    current_span += span
-                    
+                    cur += span
         QToolTip.hideText()
         super().mouseMoveEvent(event)
 
-class MetricCard(QFrame):
-    """A styled card displaying a single metric."""
-    def __init__(self, title, value="-", color="#0078d7"):
-        super().__init__()
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setObjectName("MetricCard")
-        self.setMinimumHeight(80)
-        
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        
-        self.lbl_title = QLabel(title)
-        self.lbl_title.setObjectName("MetricTitle")
-        layout.addWidget(self.lbl_title)
-        
-        self.lbl_value = QLabel(value)
-        self.lbl_value.setObjectName("MetricValue")
-        self.lbl_value.setStyleSheet(f"color: {color};") # Keep dynamic chart color matching
-        layout.addWidget(self.lbl_value)
-        
-    def set_value(self, value):
-        self.lbl_value.setText(value)
-
-class InfoCard(QFrame):
-    """A styled card for system information text."""
-    def __init__(self, title, value, icon="ℹ️"):
-        super().__init__()
-        self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setObjectName("InfoCard")
-        # Increase minimum height to prevent overlapping and adjust size policy
-        self.setMinimumHeight(95)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(5)
-        
-        header = QHBoxLayout()
-        lbl_icon = QLabel(icon)
-        lbl_icon.setObjectName("InfoIcon")
-        
-        lbl_title = QLabel(title)
-        lbl_title.setObjectName("InfoTitle")
-        
-        header.addWidget(lbl_icon)
-        header.addWidget(lbl_title)
-        header.addStretch()
-        layout.addLayout(header)
-        
-        self.lbl_value = QLabel(value)
-        self.lbl_value.setObjectName("InfoValue")
-        # Re-enable word wrap so long processor strings can wrap to the next line comfortably
-        self.lbl_value.setWordWrap(True) 
-        # Add tooltip so full text is visible if it gets truncated
-        self.lbl_value.setToolTip(value)
-        self.lbl_value.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        layout.addWidget(self.lbl_value)
-        layout.addStretch()
-
-    def set_value(self, value):
-        self.lbl_value.setText(value)
-        self.lbl_value.setToolTip(value)
 
 class DataFlowDiagram(QWidget):
-    """Visual representation of system resource flow."""
+    """Compact system resource flow diagram with glowing cyber nodes and bus lines."""
     def __init__(self):
         super().__init__()
-        self.setMinimumHeight(160)
+        self.setFixedHeight(68)
         self.cpu_val = 0
         self.ram_val = 0
         self.swap_val = 0
@@ -469,92 +431,540 @@ class DataFlowDiagram(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
         text_col = self.palette().color(QPalette.ColorRole.WindowText)
-        
-        # Colors
-        col_cpu = QColor("#0078d7")
-        col_ram = QColor("#28a745")
-        col_disk = QColor("#dc3545") if self.disk_active else QColor("#666")
-        
-        # Draw Nodes (Circles)
-        y_mid = h / 2 - 10
-        r = 30
-        
+
+        col_cpu = QColor("#0ea5e9")
+        col_ram = QColor("#10b981")
+        col_disk = QColor("#f59e0b") if self.disk_active else QColor("#64748b")
+
+        y_mid = 21
+        r = 13
+
         def draw_node(x, label, val, color):
-            rect = QRectF(x - r, y_mid - r, 2*r, 2*r)
+            rect = QRectF(x - r, y_mid - r, 2 * r, 2 * r)
             painter.setBrush(color)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(rect)
-            
-            painter.setPen(QColor("white")) # Text inside node always white
-            painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{val}%")
-            
-            painter.setPen(text_col)
-            painter.drawText(int(x - r), int(y_mid + r + 15), int(2*r), 20, Qt.AlignmentFlag.AlignCenter, label)
 
-        # Positions
-        x_cpu = w * 0.2
-        x_ram = w * 0.5
-        x_disk = w * 0.8
-        
-        # Draw Smooth Curved Connections
-        painter.setPen(QPen(QColor(128, 128, 128, 100), 3, Qt.PenStyle.SolidLine))
+            painter.setPen(QColor("white"))
+            painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"{int(val)}%")
+
+            painter.setPen(text_col)
+            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            painter.drawText(QRectF(x - 35, y_mid + r + 3, 70, 16), Qt.AlignmentFlag.AlignCenter, label)
+
+        x_cpu = w * 0.18
+        x_ram = w * 0.50
+        x_disk = w * 0.82
+
+        painter.setPen(QPen(QColor(148, 163, 184, 80), 2, Qt.PenStyle.DashLine))
         path = QPainterPath()
         path.moveTo(x_cpu + r, y_mid)
-        # Curve to RAM
-        path.cubicTo(x_cpu + r + 40, y_mid - 30, x_ram - r - 40, y_mid - 30, x_ram - r, y_mid)
-        # Curve to Disk
+        path.cubicTo(x_cpu + r + 20, y_mid - 8, x_ram - r - 20, y_mid - 8, x_ram - r, y_mid)
         path.moveTo(x_ram + r, y_mid)
-        path.cubicTo(x_ram + r + 40, y_mid + 30, x_disk - r - 40, y_mid + 30, x_disk - r, y_mid)
+        path.cubicTo(x_ram + r + 20, y_mid + 8, x_disk - r - 20, y_mid + 8, x_disk - r, y_mid)
         painter.drawPath(path)
-        
-        draw_node(x_cpu, "CPU", int(self.cpu_val), col_cpu)
-        draw_node(x_ram, "RAM", int(self.ram_val), col_ram)
-        draw_node(x_disk, "Swap/Disk", int(self.swap_val), col_disk)
+
+        draw_node(x_cpu, "CPU", self.cpu_val, col_cpu)
+        draw_node(x_ram, "RAM", self.ram_val, col_ram)
+        draw_node(x_disk, "Disk/Swap", self.swap_val, col_disk)
+
+
+class MiniDonutMeter(QWidget):
+    """Pair of dual mini donut rings for RAM & Swap utilization in the top ribbon."""
+    def __init__(self):
+        super().__init__()
+        self.setFixedHeight(68)
+        self.ram_pct = 0.0
+        self.swap_pct = 0.0
+
+    def update_values(self, ram_pct, swap_pct):
+        self.ram_pct = ram_pct
+        self.swap_pct = swap_pct
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        text_col = self.palette().color(QPalette.ColorRole.WindowText)
+
+        def draw_ring(center_x, pct, title, color):
+            size = 36
+            r_rect = QRectF(center_x - size / 2, 2, size, size)
+
+            # Background arc
+            painter.setPen(QPen(QColor(148, 163, 184, 40), 4))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(r_rect)
+
+            # Active arc
+            painter.setPen(QPen(color, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            span = int(-pct * 3.6 * 16)
+            painter.drawArc(r_rect, 90 * 16, span)
+
+            # Center text
+            painter.setPen(text_col)
+            painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+            painter.drawText(r_rect, Qt.AlignmentFlag.AlignCenter, f"{int(pct)}%")
+
+            # Label beneath
+            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            painter.drawText(QRectF(center_x - 45, 42, 90, 16), Qt.AlignmentFlag.AlignCenter, title)
+
+        draw_ring(w * 0.28, self.ram_pct, "Physical RAM", QColor("#10b981"))
+        draw_ring(w * 0.72, self.swap_pct, "Swap Pagefile", QColor("#0ea5e9"))
+
+
+class InfoCard(QFrame):
+    """High-density styled telemetry tile for in-depth system & memory properties."""
+    def __init__(self, title, value="-", icon="ℹ️", color=None):
+        super().__init__()
+        self.setObjectName("InfoCard")
+        self.setMinimumHeight(54)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(2)
+
+        header = QHBoxLayout()
+        header.setSpacing(5)
+        lbl_icon = QLabel(icon)
+        lbl_icon.setStyleSheet("font-size: 11px;")
+        lbl_title = QLabel(title)
+        lbl_title.setObjectName("InfoTitle")
+        lbl_title.setStyleSheet("font-size: 9px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.3px;")
+        header.addWidget(lbl_icon)
+        header.addWidget(lbl_title)
+        header.addStretch()
+        layout.addLayout(header)
+
+        self.lbl_value = QLabel(value)
+        self.lbl_value.setObjectName("InfoValue")
+        val_color = color if color else "#f8fafc"
+        self.lbl_value.setStyleSheet(f"font-size: 11.5px; font-weight: 800; color: {val_color};")
+        self.lbl_value.setWordWrap(False)
+        self.lbl_value.setToolTip(value)
+        layout.addWidget(self.lbl_value)
+
+    def set_value(self, value):
+        self.lbl_value.setText(value)
+        self.lbl_value.setToolTip(value)
+
+
+# --- Main Dashboard Widget ---
 
 class MemoryMonitorWidget(QWidget):
     """
-    Redesigned Memory & Storage Dashboard.
-    Features: Real-time charts, S.M.A.R.T health, Temp Cleanup, PDF Export.
+    Enterprise Memory Intelligence, Optimization & Storage Forensics Suite.
+    Designed with a zero-scroll responsive layout, comprehensive 20-metric deep
+    hardware and memory pools architecture, live working-set trimming, and FMS reports.
     """
-    HIGH_RAM_THRESHOLD = 90.0
-    HIGH_DISK_THRESHOLD = 95.0
-
-    def __init__(self, session_manager=None, parent=None):
-        super().__init__(parent)
+    def __init__(self, session_manager=None):
+        super().__init__()
         self.session = session_manager
         self.setObjectName("MemoryMonitorWidget")
 
-        # --- Data State ---
+        # State Variables
         self.smart_cache = {}
         self.smart_last_check = 0
-        self.alerted_drives = set()
         self.prev_disk_io = psutil.disk_io_counters()
         self.last_io_time = time.time()
         self.boot_time = datetime.datetime.fromtimestamp(psutil.boot_time())
-
-        # --- Main Layout ---
-        outer_layout = QVBoxLayout(self)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        
-        self.scroll_content = QWidget()
-        self.main_layout = QVBoxLayout(self.scroll_content)
-        self.main_layout.setContentsMargins(15, 15, 15, 15)
-        self.main_layout.setSpacing(20)
-        
-        self.scroll_area.setWidget(self.scroll_content)
-        outer_layout.addWidget(self.scroll_area)
+        self._current_procs = []
 
         self._setup_ui()
 
-        # --- Timer ---
+        # Background Worker & Timer
+        self.worker = None
+        self.clean_worker = None
+        self.optimizer_worker = None
+
         self.refresh_timer = QTimer(self)
-        self.refresh_timer.setInterval(2000) # 2 seconds
+        self.refresh_timer.setInterval(2000)
         self.refresh_timer.timeout.connect(self.update_all_stats)
+
+    def _setup_ui(self):
+        # 100% viewport single-screen layout (NO scroll area)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10, 8, 10, 8)
+        main_layout.setSpacing(6)
+
+        # ==========================================================
+        # 1. TOP CONTROL & OPERATIONS TOOLBAR
+        # ==========================================================
+        top_toolbar = QFrame()
+        top_toolbar.setObjectName("ProcessToolbar")
+        top_toolbar.setFixedHeight(46)
+        l_ops = QHBoxLayout(top_toolbar)
+        l_ops.setContentsMargins(10, 4, 10, 4)
+        l_ops.setSpacing(10)
+
+        self.btn_refresh = QPushButton("🔄 Refresh")
+        self.btn_refresh.setObjectName("BtnPrimary")
+        self.btn_refresh.setFixedHeight(30)
+        self.btn_refresh.setMinimumWidth(90)
+        self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_refresh.clicked.connect(self.update_all_stats)
+        l_ops.addWidget(self.btn_refresh)
+
+        self.btn_clean = QPushButton("🗑️ Clean Temp")
+        self.btn_clean.setToolTip("Recursively remove temporary system files and free disk space")
+        self.btn_clean.setObjectName("BtnDanger")
+        self.btn_clean.setFixedHeight(30)
+        self.btn_clean.setMinimumWidth(115)
+        self.btn_clean.setStyleSheet("padding: 4px 14px; font-weight: bold;")
+        self.btn_clean.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_clean.clicked.connect(self.clean_temp_files)
+        l_ops.addWidget(self.btn_clean)
+
+        self.btn_trim = QPushButton("⚡ Trim Working Sets")
+        self.btn_trim.setToolTip("Flush unreferenced memory pages from processes into standby pool to instantly free physical RAM")
+        self.btn_trim.setFixedHeight(30)
+        self.btn_trim.setMinimumWidth(145)
+        self.btn_trim.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_trim.setStyleSheet("background: #0284c7; color: white; font-weight: bold; border-radius: 6px; padding: 4px 14px; font-size: 11px;")
+        self.btn_trim.clicked.connect(self.trim_working_sets)
+        l_ops.addWidget(self.btn_trim)
+
+        self.btn_export = QPushButton("📥 Export Dossier")
+        self.btn_export.setToolTip("Generate Executive Memory & Storage Forensic Dossier (PDF) and vault to FMS")
+        self.btn_export.setObjectName("BtnWarning")
+        self.btn_export.setFixedHeight(30)
+        self.btn_export.setMinimumWidth(125)
+        self.btn_export.setStyleSheet("padding: 4px 14px; font-weight: bold;")
+        self.btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_export.clicked.connect(self.export_pdf)
+        l_ops.addWidget(self.btn_export)
+
+        l_ops.addStretch()
+
+        self.lbl_system_pressure = QLabel("🟢 System Memory Healthy")
+        self.lbl_system_pressure.setStyleSheet("font-size: 11px; font-weight: 700; color: #10b981; margin-right: 8px;")
+        l_ops.addWidget(self.lbl_system_pressure)
+
+        self.chk_auto = QCheckBox("Auto-Refresh (2s)")
+        self.chk_auto.setChecked(True)
+        self.chk_auto.stateChanged.connect(self._toggle_auto)
+        l_ops.addWidget(self.chk_auto)
+
+        main_layout.addWidget(top_toolbar)
+
+        # ==========================================================
+        # 2. TOP TELEMETRY RIBBON (KPIs, Flow & Donut Meters)
+        # ==========================================================
+        ribbon_layout = QHBoxLayout()
+        ribbon_layout.setSpacing(6)
+
+        # Card 1: Physical RAM
+        self.card_ram = QFrame()
+        self.card_ram.setObjectName("MetricCard")
+        self.card_ram.setFixedHeight(94)
+        c_ram_layout = QVBoxLayout(self.card_ram)
+        c_ram_layout.setContentsMargins(12, 6, 12, 6)
+        c_ram_layout.setSpacing(3)
+
+        lbl_ram_title = QLabel("🧠 PHYSICAL RAM")
+        lbl_ram_title.setObjectName("MetricTitle")
+        c_ram_layout.addWidget(lbl_ram_title)
+
+        self.lbl_ram_val = QLabel("0.0 GB / 0.0 GB")
+        self.lbl_ram_val.setStyleSheet("font-size: 16px; font-weight: 900; color: #10b981;")
+        c_ram_layout.addWidget(self.lbl_ram_val)
+
+        self.bar_ram = QProgressBar()
+        self.bar_ram.setFixedHeight(7)
+        self.bar_ram.setTextVisible(False)
+        self.bar_ram.setStyleSheet("""
+            QProgressBar { background: #1e293b; border-radius: 3px; border: none; }
+            QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #10b981, stop:1 #34d399); border-radius: 3px; }
+        """)
+        c_ram_layout.addWidget(self.bar_ram)
+
+        self.lbl_ram_sub = QLabel("Available: -  |  0.0% Used")
+        self.lbl_ram_sub.setStyleSheet("font-size: 10px; color: #94a3b8;")
+        c_ram_layout.addWidget(self.lbl_ram_sub)
+        ribbon_layout.addWidget(self.card_ram, 3)
+
+        # Card 2: Swap / Virtual Memory
+        self.card_swap = QFrame()
+        self.card_swap.setObjectName("MetricCard")
+        self.card_swap.setFixedHeight(94)
+        c_swap_layout = QVBoxLayout(self.card_swap)
+        c_swap_layout.setContentsMargins(12, 6, 12, 6)
+        c_swap_layout.setSpacing(3)
+
+        lbl_swap_title = QLabel("🔄 VIRTUAL SWAP")
+        lbl_swap_title.setObjectName("MetricTitle")
+        c_swap_layout.addWidget(lbl_swap_title)
+
+        self.lbl_swap_val = QLabel("0.0 GB / 0.0 GB")
+        self.lbl_swap_val.setStyleSheet("font-size: 16px; font-weight: 900; color: #0ea5e9;")
+        c_swap_layout.addWidget(self.lbl_swap_val)
+
+        self.bar_swap = QProgressBar()
+        self.bar_swap.setFixedHeight(7)
+        self.bar_swap.setTextVisible(False)
+        self.bar_swap.setStyleSheet("""
+            QProgressBar { background: #1e293b; border-radius: 3px; border: none; }
+            QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0ea5e9, stop:1 #38bdf8); border-radius: 3px; }
+        """)
+        c_swap_layout.addWidget(self.bar_swap)
+
+        self.lbl_swap_sub = QLabel("Free: -  |  0.0% Used")
+        self.lbl_swap_sub.setStyleSheet("font-size: 10px; color: #94a3b8;")
+        c_swap_layout.addWidget(self.lbl_swap_sub)
+        ribbon_layout.addWidget(self.card_swap, 3)
+
+        # Card 3: System Resource Flow
+        self.card_flow = QFrame()
+        self.card_flow.setObjectName("MetricCard")
+        self.card_flow.setFixedHeight(94)
+        c_flow_layout = QVBoxLayout(self.card_flow)
+        c_flow_layout.setContentsMargins(8, 4, 8, 4)
+        c_flow_layout.setSpacing(0)
+
+        lbl_flow_title = QLabel("⚡ RESOURCE FLOW")
+        lbl_flow_title.setObjectName("MetricTitle")
+        c_flow_layout.addWidget(lbl_flow_title)
+
+        self.flow_diagram = DataFlowDiagram()
+        c_flow_layout.addWidget(self.flow_diagram)
+        ribbon_layout.addWidget(self.card_flow, 4)
+
+        # Card 4: Memory Composition (Dual Donuts)
+        self.card_donuts = QFrame()
+        self.card_donuts.setObjectName("MetricCard")
+        self.card_donuts.setFixedHeight(94)
+        c_d_layout = QVBoxLayout(self.card_donuts)
+        c_d_layout.setContentsMargins(8, 4, 8, 4)
+        c_d_layout.setSpacing(0)
+
+        lbl_donuts_title = QLabel("🍩 MEMORY COMPOSITION")
+        lbl_donuts_title.setObjectName("MetricTitle")
+        c_d_layout.addWidget(lbl_donuts_title)
+
+        self.mini_donuts = MiniDonutMeter()
+        c_d_layout.addWidget(self.mini_donuts)
+        ribbon_layout.addWidget(self.card_donuts, 3)
+
+        main_layout.addLayout(ribbon_layout)
+
+        # ==========================================================
+        # 3. BALANCED EXECUTIVE WORKSPACE (2 Wings, Perfect Symmetry)
+        # ==========================================================
+        deck_layout = QHBoxLayout()
+        deck_layout.setSpacing(8)
+
+        # ----------------------------------------------------------
+        # LEFT WING (50%): Curves + Comprehensive Hardware Architecture
+        # ----------------------------------------------------------
+        left_col = QVBoxLayout()
+        left_col.setSpacing(8)
+
+        # Historical Curves
+        self.chart_tabs = QTabWidget()
+        self.chart_tabs.setObjectName("ChartTabs")
+        self.chart_ram_hist = ModernChart("🧠 RAM Allocation History", "#10b981", 100.0, False, "%")
+        self.chart_read = ModernChart("⬇️ Disk Read Throughput", "#0ea5e9", 1024 * 1024, True, "B")
+        self.chart_write = ModernChart("⬆️ Disk Write Throughput", "#f59e0b", 1024 * 1024, True, "B")
+
+        self.chart_tabs.addTab(self.chart_ram_hist, "RAM History")
+        self.chart_tabs.addTab(self.chart_read, "Disk Read I/O")
+        self.chart_tabs.addTab(self.chart_write, "Disk Write I/O")
+        left_col.addWidget(self.chart_tabs, 4)
+
+        # Deep Detailed Information & Architecture Matrix (Spacious 4x5 Grid)
+        self.detail_card = QFrame()
+        self.detail_card.setObjectName("ProcessTableContainer")
+        det_layout = QVBoxLayout(self.detail_card)
+        det_layout.setContentsMargins(10, 8, 10, 8)
+        det_layout.setSpacing(6)
+
+        det_header = QHBoxLayout()
+        lbl_det_title = QLabel("🔬 Detailed Memory & Hardware Architecture")
+        lbl_det_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #38bdf8;")
+        det_header.addWidget(lbl_det_title)
+        det_header.addStretch()
+
+        self.lbl_arch_badge = QLabel(f"● {platform.machine()} Active")
+        self.lbl_arch_badge.setStyleSheet("font-size: 9.5px; font-weight: 700; color: #10b981; background: rgba(16, 185, 129, 0.14); border-radius: 8px; padding: 2px 7px;")
+        det_header.addWidget(self.lbl_arch_badge)
+        det_layout.addLayout(det_header)
+
+        # 4-Column x 5-Row Grid: Fills the entire lower container without any empty void!
+        det_grid = QGridLayout()
+        det_grid.setSpacing(6)
+        det_grid.setContentsMargins(2, 2, 2, 2)
+
+        # Row 0: Platform Identity
+        self.info_uptime = InfoCard("Uptime", "-", "⏱️", "#0ea5e9")
+        self.info_os = InfoCard("Operating System", f"{platform.system()} {platform.release()}", "💻", "#38bdf8")
+        self.info_cpu = InfoCard("CPU Cores", f"{psutil.cpu_count(logical=True)} Cores ({psutil.cpu_count(logical=False)} Phys)", "🧠", "#a855f7")
+        self.info_host = InfoCard("Hostname", platform.node(), "🏠")
+        det_grid.addWidget(self.info_uptime, 0, 0)
+        det_grid.addWidget(self.info_os, 0, 1)
+        det_grid.addWidget(self.info_cpu, 0, 2)
+        det_grid.addWidget(self.info_host, 0, 3)
+
+        # Row 1: Kernel & Processor
+        self.info_kernel = InfoCard("Kernel / Build", platform.version().split('.')[0] if '.' in platform.version() else platform.release(), "⚙️")
+        self.info_arch = InfoCard("Architecture", platform.machine(), "🏗️")
+        self.info_proc = InfoCard("Processor Specification", platform.processor() or "Genuine Processor", "⚡", "#f59e0b")
+        det_grid.addWidget(self.info_kernel, 1, 0)
+        det_grid.addWidget(self.info_arch, 1, 1)
+        det_grid.addWidget(self.info_proc, 1, 2, 1, 2)
+
+        # Row 2: Physical Memory Allocation
+        self.info_mem_total = InfoCard("Total Physical RAM", "-", "💾", "#10b981")
+        self.info_mem_used = InfoCard("Used RAM (Working Set)", "-", "📊", "#38bdf8")
+        self.info_mem_avail = InfoCard("Available RAM Pool", "-", "🟢", "#34d399")
+        self.info_mem_free = InfoCard("Free (Unallocated)", "-", "🆓", "#94a3b8")
+        det_grid.addWidget(self.info_mem_total, 2, 0)
+        det_grid.addWidget(self.info_mem_used, 2, 1)
+        det_grid.addWidget(self.info_mem_avail, 2, 2)
+        det_grid.addWidget(self.info_mem_free, 2, 3)
+
+        # Row 3: Virtual Memory & Standby Cache
+        self.info_mem_cached = InfoCard("Cached & Standby", "-", "⚡", "#38bdf8")
+        self.info_swap_total = InfoCard("Total Virtual Swap", "-", "🔄", "#0ea5e9")
+        self.info_swap_used = InfoCard("Swap / Pagefile Used", "-", "📉", "#f59e0b")
+        self.info_commit_limit = InfoCard("System Commit Limit", "-", "🛡️", "#a855f7")
+        det_grid.addWidget(self.info_mem_cached, 3, 0)
+        det_grid.addWidget(self.info_swap_total, 3, 1)
+        det_grid.addWidget(self.info_swap_used, 3, 2)
+        det_grid.addWidget(self.info_commit_limit, 3, 3)
+
+        # Row 4: Commit Charges & Health Metrics
+        self.info_commit_charge = InfoCard("Committed Charge", "-", "📈", "#ec4899")
+        self.info_commit_avail = InfoCard("Available Commit Pool", "-", "🛡️", "#10b981")
+        self.info_mem_pressure = InfoCard("RAM Pressure Index", "Normal", "🌡️", "#10b981")
+        self.info_boot_time = InfoCard("System Boot Time", self.boot_time.strftime("%Y-%m-%d %H:%M"), "🧭", "#64748b")
+        det_grid.addWidget(self.info_commit_charge, 4, 0)
+        det_grid.addWidget(self.info_commit_avail, 4, 1)
+        det_grid.addWidget(self.info_mem_pressure, 4, 2)
+        det_grid.addWidget(self.info_boot_time, 4, 3)
+
+        det_layout.addLayout(det_grid)
+        left_col.addWidget(self.detail_card, 6)
+
+        deck_layout.addLayout(left_col, 50)
+
+        # ----------------------------------------------------------
+        # RIGHT WING (50%): Storage Partitions + Top Processes Table
+        # ----------------------------------------------------------
+        right_col = QVBoxLayout()
+        right_col.setSpacing(8)
+
+        # Storage Partitions & S.M.A.R.T Health Card
+        self.disk_card = QFrame()
+        self.disk_card.setObjectName("ProcessTableContainer")
+        d_card_layout = QVBoxLayout(self.disk_card)
+        d_card_layout.setContentsMargins(10, 8, 10, 8)
+        d_card_layout.setSpacing(5)
+
+        lbl_disk_title = QLabel("💾 Storage Partitions & S.M.A.R.T Health")
+        lbl_disk_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #38bdf8;")
+        d_card_layout.addWidget(lbl_disk_title)
+
+        d_body = QHBoxLayout()
+        d_body.setSpacing(8)
+
+        self.disk_table = QTableWidget()
+        self.disk_table.setColumnCount(6)
+        self.disk_table.setHorizontalHeaderLabels(["Drive", "Total", "Free", "Usage %", "FS", "Health"])
+        self.disk_table.verticalHeader().setVisible(False)
+        self.disk_table.verticalHeader().setDefaultSectionSize(28)
+        self.disk_table.setAlternatingRowColors(True)
+        self.disk_table.setShowGrid(False)
+        self.disk_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.disk_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.disk_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+
+        dh = self.disk_table.horizontalHeader()
+        dh.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.disk_table.setColumnWidth(0, 55)
+        dh.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self.disk_table.setColumnWidth(1, 90)
+        dh.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.disk_table.setColumnWidth(2, 90)
+        dh.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        dh.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.disk_table.setColumnWidth(4, 65)
+        dh.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        self.disk_table.setColumnWidth(5, 85)
+        d_body.addWidget(self.disk_table, 4)
+
+        self.disk_chart = DiskPartitionPieChart()
+        d_body.addWidget(self.disk_chart, 1)
+
+        d_card_layout.addLayout(d_body)
+        right_col.addWidget(self.disk_card, 4)
+
+        # Top Memory Consuming Processes Card
+        self.proc_card = QFrame()
+        self.proc_card.setObjectName("ProcessTableContainer")
+        p_card_layout = QVBoxLayout(self.proc_card)
+        p_card_layout.setContentsMargins(10, 8, 10, 8)
+        p_card_layout.setSpacing(6)
+
+        p_header = QHBoxLayout()
+        lbl_proc_title = QLabel("🧠 Top Memory Consumers & Working Sets")
+        lbl_proc_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #38bdf8;")
+        p_header.addWidget(lbl_proc_title)
+
+        p_header.addStretch()
+
+        self.txt_proc_search = QLineEdit()
+        self.txt_proc_search.setPlaceholderText("🔍 Filter process or PID...")
+        self.txt_proc_search.setFixedHeight(26)
+        self.txt_proc_search.setFixedWidth(180)
+        self.txt_proc_search.setStyleSheet("border: 1px solid #334155; border-radius: 6px; padding: 2px 8px; font-size: 11px; background: #0f172a; color: #f8fafc;")
+        self.txt_proc_search.textChanged.connect(self._filter_procs)
+        p_header.addWidget(self.txt_proc_search)
+        p_card_layout.addLayout(p_header)
+
+        self.proc_table = QTableWidget()
+        self.proc_table.setColumnCount(5)
+        self.proc_table.setHorizontalHeaderLabels(["PID", "PROCESS NAME", "PHYSICAL RAM", "MEMORY SHARE", "ACTION"])
+        self.proc_table.verticalHeader().setVisible(False)
+        self.proc_table.verticalHeader().setDefaultSectionSize(30)
+        self.proc_table.setAlternatingRowColors(True)
+        self.proc_table.setShowGrid(False)
+        self.proc_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.proc_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.proc_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+
+        ph = self.proc_table.horizontalHeader()
+        ph.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.proc_table.setColumnWidth(0, 70)
+        ph.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        ph.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.proc_table.setColumnWidth(2, 110)
+        ph.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.proc_table.setColumnWidth(3, 130)
+        ph.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.proc_table.setColumnWidth(4, 60)
+
+        p_card_layout.addWidget(self.proc_table)
+
+        # Process summary footer
+        p_footer = QHBoxLayout()
+        self.lbl_proc_total = QLabel("Active: 0  |  Footprint: 0 MB")
+        self.lbl_proc_total.setStyleSheet("font-size: 10px; color: #94a3b8;")
+        p_footer.addWidget(self.lbl_proc_total)
+        p_footer.addStretch()
+        p_card_layout.addLayout(p_footer)
+
+        right_col.addWidget(self.proc_card, 6)
+
+        deck_layout.addLayout(right_col, 50)
+
+        main_layout.addLayout(deck_layout, 1)
+
+    # --- Lifecycle & Data Sync ---
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -566,190 +976,91 @@ class MemoryMonitorWidget(QWidget):
         super().hideEvent(event)
         self.refresh_timer.stop()
 
-    def _setup_ui(self):
-        # --- Top Toolbar: Operations ---
-        top_toolbar = QWidget()
-        l_ops = QHBoxLayout(top_toolbar)
-        l_ops.setContentsMargins(0, 0, 0, 0)
-        l_ops.setSpacing(15)
-        
-        self.btn_refresh = QPushButton("🔄 Refresh")
-        self.btn_refresh.setObjectName("BtnPrimary")
-        self.btn_refresh.clicked.connect(self.update_all_stats)
-        
-        self.btn_clean = QPushButton("🗑️ Clean Temp")
-        self.btn_clean.setObjectName("BtnDanger")
-        self.btn_clean.clicked.connect(self.clean_temp_files)
-        
-        self.btn_export = QPushButton("📄 Export PDF")
-        self.btn_export.setObjectName("BtnWarning")
-        self.btn_export.clicked.connect(self.export_pdf)
-        
-        self.chk_auto = QCheckBox("Auto-Refresh (2s)")
-        self.chk_auto.setChecked(True)
-        self.chk_auto.stateChanged.connect(self._toggle_auto)
-
-        l_ops.addWidget(self.btn_refresh)
-        l_ops.addWidget(self.btn_clean)
-        l_ops.addWidget(self.btn_export)
-        l_ops.addStretch()
-        l_ops.addWidget(self.chk_auto)
-        
-        self.main_layout.addWidget(top_toolbar)
-
-        # --- Content Area (Two Columns) ---
-        content_container = QWidget()
-        content_layout = QHBoxLayout(content_container)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(20)
-
-        # --- Left Column: Visuals & Statistics ---
-        left_container = QWidget()
-        left_layout = QVBoxLayout(left_container)
-        left_layout.setSpacing(15)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # 1. System Flow Diagram
-        grp_flow = QGroupBox("System Resource Flow")
-        l_flow = QVBoxLayout(grp_flow)
-        self.flow_diagram = DataFlowDiagram()
-        l_flow.addWidget(self.flow_diagram)
-        left_layout.addWidget(grp_flow)
-
-        # 2. Memory Composition (Donuts)
-        grp_mem_vis = QGroupBox("Memory Composition")
-        l_mem_vis = QHBoxLayout(grp_mem_vis)
-        self.donut_ram = DonutChart("RAM Usage", "#0078d7")
-        self.donut_swap = DonutChart("Swap Usage", "#ffc107")
-        l_mem_vis.addWidget(self.donut_ram)
-        l_mem_vis.addWidget(self.donut_swap)
-        left_layout.addWidget(grp_mem_vis)
-
-        # 3. Key Metrics Grid
-        grp_metrics = QGroupBox("Key Statistics")
-        l_metrics = QGridLayout(grp_metrics)
-        self.card_total = MetricCard("Total RAM", color="#888888")
-        self.card_used = MetricCard("Used RAM", color="#0078d7")
-        self.card_avail = MetricCard("Available", color="#28a745")
-        self.card_swap = MetricCard("Swap Used", color="#ffc107")
-        l_metrics.addWidget(self.card_total, 0, 0)
-        l_metrics.addWidget(self.card_used, 0, 1)
-        l_metrics.addWidget(self.card_avail, 1, 0)
-        l_metrics.addWidget(self.card_swap, 1, 1)
-        left_layout.addWidget(grp_metrics)
-
-        # 4. Historical Charts
-        self.chart_tabs = QTabWidget()
-        self.chart_ram_hist = ModernChart("RAM History", "#0078d7")
-        self.chart_read = ModernChart("Read Speed", "#28a745", max_value=1024*1024, auto_scale=True, suffix="B")
-        self.chart_write = ModernChart("Write Speed", "#dc3545", max_value=1024*1024, auto_scale=True, suffix="B")
-        
-        self.chart_tabs.addTab(self.chart_ram_hist, "RAM")
-        self.chart_tabs.addTab(self.chart_read, "Disk Read")
-        self.chart_tabs.addTab(self.chart_write, "Disk Write")
-        self.chart_tabs.setMinimumHeight(200)
-        left_layout.addWidget(self.chart_tabs, 1) # Added stretch 1 to fill available space gracefully
-
-        # --- Right Column: Tables, Info ---
-        right_container = QWidget()
-        right_layout = QVBoxLayout(right_container)
-        right_layout.setSpacing(15)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-
-        # 1. System Info
-        grp_sys = QGroupBox("Memory Information")
-        l_sys = QGridLayout(grp_sys)
-        l_sys.setSpacing(10)
-        
-        self.info_uptime = InfoCard("Uptime", "-", "⏱️")
-        self.info_os = InfoCard("OS", sys.platform, "💻")
-        self.info_cpu = InfoCard("CPU Cores", str(psutil.cpu_count(logical=True)), "🧠")
-        self.info_host = InfoCard("Hostname", platform.node(), "🏠")
-        self.info_kernel = InfoCard("Kernel", platform.release(), "⚙️")
-        self.info_arch = InfoCard("Architecture", platform.machine(), "🏗️")
-        self.info_proc = InfoCard("Processor", platform.processor(), "⚡")
-        self.info_mem = InfoCard("Total Memory", "-", "💾")
-        self.info_swap = InfoCard("Total Swap", "-", "🔄")
-        
-        l_sys.addWidget(self.info_uptime, 0, 0)
-        l_sys.addWidget(self.info_os, 0, 1)
-        l_sys.addWidget(self.info_cpu, 0, 2)
-        l_sys.addWidget(self.info_host, 1, 0)
-        l_sys.addWidget(self.info_kernel, 1, 1)
-        l_sys.addWidget(self.info_arch, 1, 2)
-        l_sys.addWidget(self.info_proc, 2, 0, 1, 3) # Span 3 cols
-        l_sys.addWidget(self.info_mem, 3, 0, 1, 1)
-        l_sys.addWidget(self.info_swap, 3, 1, 1, 2) # Span 2 cols
-        
-        right_layout.addWidget(grp_sys, 0) # No stretch so it sizes to contents safely
-
-        # 2. Storage Partitions
-        grp_disk = QGroupBox("Storage Partitions")
-        l_disk = QHBoxLayout(grp_disk)
-        self.disk_table = QTableWidget()
-        self.disk_table.setColumnCount(6)
-        self.disk_table.setHorizontalHeaderLabels(["Drive", "Total", "Free", "Health", "FS", "Usage"])
-        self.disk_table.verticalHeader().setVisible(False)
-        self.disk_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.disk_table.setAlternatingRowColors(True)
-        self.disk_table.setMinimumHeight(150)
-        l_disk.addWidget(self.disk_table, 2)
-        
-        self.disk_chart = DiskPartitionPieChart()
-        l_disk.addWidget(self.disk_chart, 1)
-        
-        right_layout.addWidget(grp_disk, 1)
-
-        # 3. Top Processes
-        grp_proc = QGroupBox("Top Memory Consumers")
-        l_proc = QVBoxLayout(grp_proc)
-        self.proc_table = QTableWidget()
-        self.proc_table.setColumnCount(3)
-        self.proc_table.setHorizontalHeaderLabels(["PID", "Name", "Memory"])
-        self.proc_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.proc_table.verticalHeader().setVisible(False)
-        self.proc_table.setAlternatingRowColors(True)
-        self.proc_table.setMinimumHeight(200)
-        l_proc.addWidget(self.proc_table)
-        right_layout.addWidget(grp_proc, 1)
-
-        # Assemble main content area
-        content_layout.addWidget(left_container, 4)
-        content_layout.addWidget(right_container, 6)
-        
-        self.main_layout.addWidget(content_container, 1)
-
-    # --- Logic ---
-
     def reset_ui(self):
-        """Triggers a data refresh."""
         self.update_all_stats()
 
     def update_all_stats(self):
-        if hasattr(self, 'worker') and self.worker.isRunning():
+        if self.worker and self.worker.isRunning():
             return
-            
         self.worker = MemoryWorker(
-            self.prev_disk_io, self.last_io_time, 
-            self.smart_cache, self.smart_last_check, 
+            self.prev_disk_io, self.last_io_time,
+            self.smart_cache, self.smart_last_check,
             self.boot_time
         )
         self.worker.data_fetched.connect(self.handle_stats_data)
         self.worker.start()
 
     def handle_stats_data(self, data):
+        total_ram = 1
         if 'mem' in data:
             mem = data['mem']
-            swap = data['swap']
+            swap = data.get('swap')
+            total_ram = mem.total
+
+            # Update Physical RAM Ribbon
+            used_gb = mem.used / (1024**3)
+            total_gb = mem.total / (1024**3)
+            avail_gb = mem.available / (1024**3)
+            self.lbl_ram_val.setText(f"{used_gb:.2f} GB / {total_gb:.2f} GB")
+            self.bar_ram.setValue(int(mem.percent))
+            self.lbl_ram_sub.setText(f"Available: {avail_gb:.2f} GB  |  {mem.percent:.1f}% Used")
+
+            # Memory Pressure Alert Badge
+            if mem.percent > 85.0:
+                self.lbl_system_pressure.setText(f"⚠️ High RAM Pressure ({mem.percent:.1f}%)")
+                self.lbl_system_pressure.setStyleSheet("font-size: 11px; font-weight: 700; color: #ea580c; margin-right: 8px;")
+            else:
+                self.lbl_system_pressure.setText("🟢 System Memory Healthy")
+                self.lbl_system_pressure.setStyleSheet("font-size: 11px; font-weight: 700; color: #10b981; margin-right: 8px;")
+
+            # Update Swap Ribbon
+            s_used = 0
+            s_tot = 0
+            s_pct = 0.0
+            if swap:
+                s_used = swap.used / (1024**3)
+                s_tot = swap.total / (1024**3)
+                s_free = swap.free / (1024**3)
+                s_pct = swap.percent
+                self.lbl_swap_val.setText(f"{s_used:.2f} GB / {s_tot:.2f} GB")
+                self.bar_swap.setValue(int(swap.percent))
+                self.lbl_swap_sub.setText(f"Free: {s_free:.2f} GB  |  {swap.percent:.1f}% Used")
+
+            # Update Mini Dual Donut
+            self.mini_donuts.update_values(mem.percent, s_pct)
             self.chart_ram_hist.update_value(mem.percent)
-            self.donut_ram.update_value(mem.percent)
-            self.donut_swap.update_value(swap.percent)
-            self.card_total.set_value(self._fmt(mem.total))
-            self.card_used.set_value(self._fmt(mem.used))
-            self.card_avail.set_value(self._fmt(mem.available))
-            self.card_swap.set_value(self._fmt(swap.used))
-            self.info_mem.set_value(self._fmt(mem.total))
-            self.info_swap.set_value(self._fmt(swap.total))
+
+            # Update Deep Detailed Information Grid
+            self.info_mem_total.set_value(self._fmt(mem.total))
+            self.info_mem_used.set_value(f"{self._fmt(mem.used)} ({mem.percent:.1f}%)")
+            self.info_mem_avail.set_value(self._fmt(mem.available))
+            self.info_mem_free.set_value(self._fmt(mem.free))
+
+            cached_bytes = getattr(mem, 'cached', 0) or max(0, mem.available - mem.free)
+            self.info_mem_cached.set_value(self._fmt(cached_bytes))
+
+            if swap:
+                self.info_swap_total.set_value(self._fmt(swap.total))
+                self.info_swap_used.set_value(f"{self._fmt(swap.used)} ({swap.percent:.1f}%)")
+
+                # Windows Commit Calculations
+                commit_limit = mem.total + swap.total
+                commit_charge = mem.used + swap.used
+                commit_pct = (commit_charge / commit_limit * 100.0) if commit_limit > 0 else 0
+                self.info_commit_limit.set_value(self._fmt(commit_limit))
+                self.info_commit_charge.set_value(f"{self._fmt(commit_charge)} ({commit_pct:.1f}%)")
+                self.info_commit_avail.set_value(self._fmt(max(0, commit_limit - commit_charge)))
+
+            # Memory Pressure Index Card
+            if mem.percent < 75.0:
+                self.info_mem_pressure.set_value(f"Low ({mem.percent:.1f}%)")
+                self.info_mem_pressure.lbl_value.setStyleSheet("font-size: 11.5px; font-weight: 800; color: #10b981;")
+            elif mem.percent < 90.0:
+                self.info_mem_pressure.set_value(f"Moderate ({mem.percent:.1f}%)")
+                self.info_mem_pressure.lbl_value.setStyleSheet("font-size: 11.5px; font-weight: 800; color: #f59e0b;")
+            else:
+                self.info_mem_pressure.set_value(f"Critical ({mem.percent:.1f}%)")
+                self.info_mem_pressure.lbl_value.setStyleSheet("font-size: 11.5px; font-weight: 800; color: #ef4444;")
 
         if 'new_disk_io' in data:
             self.prev_disk_io = data['new_disk_io']
@@ -759,7 +1070,9 @@ class MemoryMonitorWidget(QWidget):
 
         if 'cpu' in data:
             disk_active = (self.chart_read.current_value > 0 or self.chart_write.current_value > 0)
-            self.flow_diagram.update_values(data['cpu'], data.get('mem').percent if 'mem' in data else 0, data.get('swap').percent if 'swap' in data else 0, disk_active)
+            ram_pct = data.get('mem').percent if 'mem' in data else 0
+            swap_pct = data.get('swap').percent if 'swap' in data else 0
+            self.flow_diagram.update_values(data['cpu'], ram_pct, swap_pct, disk_active)
 
         if 'uptime' in data:
             self.info_uptime.set_value(data['uptime'])
@@ -769,205 +1082,404 @@ class MemoryMonitorWidget(QWidget):
             self.smart_last_check = data['smart_last_check']
 
         if 'partitions' in data:
-            self.disk_table.setRowCount(0)
-            chart_data = []
-            for p in data['partitions']:
-                row = self.disk_table.rowCount()
-                self.disk_table.insertRow(row)
-                self.disk_table.setItem(row, 0, QTableWidgetItem(p['mountpoint']))
-                self.disk_table.setItem(row, 1, QTableWidgetItem(self._fmt(p['total'])))
-                self.disk_table.setItem(row, 2, QTableWidgetItem(self._fmt(p['free'])))
-                
-                health = self.smart_cache.get(p['mountpoint'], "Unknown")
-                if health == "Unknown" and os.name == 'nt':
-                    health = self.smart_cache.get(p['mountpoint'].rstrip('\\'), "Unknown")
-                
-                h_item = QTableWidgetItem(health)
-                if health == "Good": h_item.setForeground(QBrush(QColor("#28a745")))
-                elif health in ["Warning", "Critical"]: h_item.setForeground(QBrush(QColor("#dc3545")))
-                self.disk_table.setItem(row, 3, h_item)
-                
-                self.disk_table.setItem(row, 4, QTableWidgetItem(p['fstype']))
-                self.disk_table.setItem(row, 5, QTableWidgetItem(f"{p['percent']}%"))
-                chart_data.append((p['mountpoint'], p['total']))
-            self.disk_chart.update_data(chart_data)
+            self._render_partitions(data['partitions'])
 
         if 'procs' in data:
-            self.proc_table.setRowCount(0)
-            for p in data['procs']:
-                r = self.proc_table.rowCount()
-                self.proc_table.insertRow(r)
-                self.proc_table.setItem(r, 0, QTableWidgetItem(str(p['pid'])))
-                self.proc_table.setItem(r, 1, QTableWidgetItem(p['name']))
-                self.proc_table.setItem(r, 2, QTableWidgetItem(self._fmt(p['rss'])))
+            self._current_procs = data['procs']
+            self._render_procs(total_ram)
+
+    def _render_partitions(self, partitions):
+        self.disk_table.setRowCount(len(partitions))
+        chart_data = []
+
+        is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+
+        for row, p in enumerate(partitions):
+            # 0: Drive Mountpoint
+            it_m = QTableWidgetItem(p['mountpoint'])
+            it_m.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            self.disk_table.setItem(row, 0, it_m)
+
+            # 1: Total
+            self.disk_table.setItem(row, 1, QTableWidgetItem(self._fmt(p['total'])))
+
+            # 2: Free
+            self.disk_table.setItem(row, 2, QTableWidgetItem(self._fmt(p['free'])))
+
+            # 3: Usage Bar
+            pct = p['percent']
+            prog_widget = QWidget()
+            prog_layout = QHBoxLayout(prog_widget)
+            prog_layout.setContentsMargins(2, 2, 2, 2)
+            prog_layout.setSpacing(6)
+
+            bar = QProgressBar()
+            bar.setFixedHeight(6)
+            bar.setTextVisible(False)
+            bar.setValue(int(pct))
+            bar_color = "#10b981" if pct < 75 else ("#f59e0b" if pct < 90 else "#ef4444")
+            bar.setStyleSheet(f"""
+                QProgressBar {{ background: {'#1e293b' if is_dark else '#e2e8f0'}; border-radius: 3px; border: none; }}
+                QProgressBar::chunk {{ background: {bar_color}; border-radius: 3px; }}
+            """)
+            prog_layout.addWidget(bar, 1)
+
+            lbl_pct = QLabel(f"{pct:.1f}%")
+            lbl_pct.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            lbl_pct.setFixedWidth(42)
+            prog_layout.addWidget(lbl_pct)
+            self.disk_table.setCellWidget(row, 3, prog_widget)
+
+            # 4: FS Type
+            it_fs = QTableWidgetItem(p['fstype'])
+            it_fs.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.disk_table.setItem(row, 4, it_fs)
+
+            # 5: S.M.A.R.T Health Badge
+            health = self.smart_cache.get(p['mountpoint'], "Good")
+            if health == "Unknown" and os.name == 'nt':
+                health = self.smart_cache.get(p['mountpoint'].rstrip('\\'), "Good")
+
+            badge_widget = QWidget()
+            b_layout = QHBoxLayout(badge_widget)
+            b_layout.setContentsMargins(2, 2, 2, 2)
+            b_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+            lbl_h = QLabel(f"● {health}")
+            if health == "Good":
+                bg = "rgba(16, 185, 129, 0.16)" if is_dark else "#dcfce7"
+                fg = "#10b981" if is_dark else "#15803d"
+                bdr = "rgba(16, 185, 129, 0.40)" if is_dark else "#86efac"
+            else:
+                bg = "rgba(245, 158, 11, 0.16)" if is_dark else "#fef3c7"
+                fg = "#f59e0b" if is_dark else "#b45309"
+                bdr = "rgba(245, 158, 11, 0.40)" if is_dark else "#fde68a"
+
+            lbl_h.setStyleSheet(f"background: {bg}; color: {fg}; border: 1px solid {bdr}; border-radius: 8px; padding: 2px 8px; font-size: 9.5px; font-weight: 700;")
+            b_layout.addWidget(lbl_h)
+            self.disk_table.setCellWidget(row, 5, badge_widget)
+
+            chart_data.append((p['mountpoint'], p['total']))
+
+        self.disk_chart.update_data(chart_data)
+
+    def _render_procs(self, total_ram):
+        search_query = self.txt_proc_search.text().strip().lower()
+        filtered = [
+            p for p in self._current_procs
+            if not search_query or search_query in p['name'].lower() or search_query in str(p['pid'])
+        ]
+
+        self.proc_table.setRowCount(len(filtered))
+        is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        total_rss = sum(p['rss'] for p in filtered)
+
+        for row, p in enumerate(filtered):
+            # 0: PID (unclipped centered integer)
+            it_pid = QTableWidgetItem(str(p['pid']))
+            it_pid.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            it_pid.setForeground(QBrush(QColor("#94a3b8")))
+            it_pid.setFont(QFont("Segoe UI", 9))
+            self.proc_table.setItem(row, 0, it_pid)
+
+            # 1: Name
+            it_name = QTableWidgetItem(p['name'])
+            it_name.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            self.proc_table.setItem(row, 1, it_name)
+
+            # 2: Memory RSS
+            it_rss = QTableWidgetItem(self._fmt(p['rss']))
+            it_rss.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            it_rss.setForeground(QBrush(QColor("#0ea5e9")))
+            it_rss.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+            self.proc_table.setItem(row, 2, it_rss)
+
+            # 3: Memory Share % Bar
+            pct = (p['rss'] / total_ram * 100.0) if total_ram > 0 else 0.0
+            prog_widget = QWidget()
+            prog_layout = QHBoxLayout(prog_widget)
+            prog_layout.setContentsMargins(4, 0, 4, 0)
+            prog_layout.setSpacing(6)
+
+            bar = QProgressBar()
+            bar.setFixedHeight(6)
+            bar.setTextVisible(False)
+            bar.setValue(min(100, int(pct * 2.5)))
+            bar.setStyleSheet(f"""
+                QProgressBar {{ background: {'#1e293b' if is_dark else '#e2e8f0'}; border-radius: 3px; border: none; }}
+                QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0ea5e9, stop:1 #38bdf8); border-radius: 3px; }}
+            """)
+            prog_layout.addWidget(bar, 1)
+
+            lbl_pct = QLabel(f"{pct:.1f}%")
+            lbl_pct.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            lbl_pct.setFixedWidth(40)
+            prog_layout.addWidget(lbl_pct)
+            self.proc_table.setCellWidget(row, 3, prog_widget)
+
+            # 4: Action Button ("✕" icon button)
+            btn_kill = QPushButton("✕")
+            btn_kill.setFixedSize(24, 20)
+            btn_kill.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_kill.setToolTip(f"Terminate {p['name']} (PID: {p['pid']})")
+            btn_kill.setStyleSheet("""
+                QPushButton {
+                    background: rgba(239, 68, 68, 0.16);
+                    color: #ef4444;
+                    border: 1px solid rgba(239, 68, 68, 0.40);
+                    border-radius: 4px;
+                    font-size: 11px;
+                    font-weight: 900;
+                    padding-bottom: 1px;
+                }
+                QPushButton:hover {
+                    background: #ef4444;
+                    color: #ffffff;
+                    border: 1px solid #dc2626;
+                }
+            """)
+            btn_kill.clicked.connect(lambda _, pid=p['pid'], name=p['name']: self.kill_proc(pid, name))
+            
+            btn_container = QWidget()
+            btn_l = QHBoxLayout(btn_container)
+            btn_l.setContentsMargins(0, 0, 0, 0)
+            btn_l.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            btn_l.addWidget(btn_kill)
+            self.proc_table.setCellWidget(row, 4, btn_container)
+
+        self.lbl_proc_total.setText(
+            f"Active: {len(filtered)} processes  |  Tracked Working Set: <b>{self._fmt(total_rss)}</b>"
+        )
+
+    def _filter_procs(self, text):
+        total_ram = 1
+        if hasattr(self, 'worker') and self.worker and hasattr(self.worker, 'boot_time'):
+            try:
+                total_ram = psutil.virtual_memory().total
+            except Exception:
+                pass
+        self._render_procs(total_ram)
+
+    def kill_proc(self, pid, name):
+        reply = QMessageBox.question(
+            self, "Terminate Process",
+            f"Are you sure you want to terminate:\n\n{name} (PID: {pid})?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                p = psutil.Process(pid)
+                p.terminate()
+                p.wait(timeout=1.5)
+                QMessageBox.information(self, "Success", f"Process {name} (PID: {pid}) terminated.")
+                self.update_all_stats()
+            except Exception as e:
+                QMessageBox.warning(self, "Error", f"Failed to terminate process:\n{str(e)}")
 
     def clean_temp_files(self):
-        temp_dir = os.environ.get('TEMP') or '/tmp'
-        reply = QMessageBox.question(self, "Confirm", f"Delete temp files in {temp_dir}?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        if reply != QMessageBox.StandardButton.Yes: return
-        
-        self.btn_clean.setEnabled(False)
-        self.btn_clean.setText("Cleaning...")
-        
-        self.clean_worker = TempCleanerWorker()
-        self.clean_worker.finished_clean.connect(self.on_clean_finished)
-        self.clean_worker.start()
+        reply = QMessageBox.question(
+            self, "Clean Temporary Files",
+            "This will purge temporary system and application cache files to reclaim disk space.\n\nProceed with cleanup?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.btn_clean.setEnabled(False)
+            self.btn_clean.setText("Cleaning...")
+            self.clean_worker = TempCleanerWorker()
+            self.clean_worker.finished_clean.connect(self._on_clean_finished)
+            self.clean_worker.start()
 
-    def on_clean_finished(self, count, freed):
+    def _on_clean_finished(self, count, freed):
         self.btn_clean.setEnabled(True)
-        self.btn_clean.setText("Clean Temp")
-        QMessageBox.information(self, "Done", f"Deleted {count} files.\nFreed {self._fmt(freed)}.")
+        self.btn_clean.setText("🗑️ Clean Temp")
+        QMessageBox.information(
+            self, "Cleanup Complete",
+            f"Temporary files cleanup completed successfully!\n\nFiles Removed: {count:,}\nDisk Space Reclaimed: {self._fmt(freed)}"
+        )
+        self.update_all_stats()
+
+    def trim_working_sets(self):
+        self.btn_trim.setEnabled(False)
+        self.btn_trim.setText("⚡ Trimming...")
+        self.optimizer_worker = MemoryOptimizerWorker()
+        self.optimizer_worker.finished_trim.connect(self._on_trim_finished)
+        self.optimizer_worker.start()
+
+    def _on_trim_finished(self, count):
+        self.btn_trim.setEnabled(True)
+        self.btn_trim.setText("⚡ Trim Working Sets")
+        QMessageBox.information(
+            self, "Optimization Complete",
+            f"Active process working sets successfully trimmed!\n\nProcesses Trimmed: {count}\nUnreferenced pages flushed to standby pool."
+        )
+        self.update_all_stats()
 
     def export_pdf(self):
-        import tempfile
-        import os
-        temp_fd, temp_path = tempfile.mkstemp(suffix=".pdf")
-        os.close(temp_fd)
-        
-        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-        printer.setOutputFileName(temp_path)
-        
-        # Helper to grab widget as base64 image
-        def grab(w):
-            b = QBuffer()
-            b.open(QIODevice.OpenModeFlag.WriteOnly)
-            w.grab().save(b, "PNG")
-            return b.data().toBase64().data().decode()
+        try:
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+            printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+            printer.setPageOrientation(QPageSize.Orientation.Portrait)
 
-        # Helper for tables
-        def table_to_html(table):
-            html = "<table border='1' cellspacing='0' cellpadding='4' width='100%'>"
-            # Header
-            html += "<thead><tr>"
-            for c in range(table.columnCount()):
-                header_item = table.horizontalHeaderItem(c)
-                header_text = header_item.text() if header_item else ""
-                html += f"<th bgcolor='#f2f2f2'>{header_text}</th>"
-            html += "</tr></thead><tbody>"
-            # Rows
-            for r in range(table.rowCount()):
-                html += "<tr>"
-                for c in range(table.columnCount()):
-                    item = table.item(r, c)
-                    text = item.text() if item else ""
-                    html += f"<td>{text}</td>"
-                html += "</tr>"
-            html += "</tbody></table>"
-            return html
-            
-        # Capture Charts (Switch tabs to ensure they render)
-        current_tab = self.chart_tabs.currentIndex()
-        
-        self.chart_tabs.setCurrentIndex(0)
-        QApplication.processEvents()
-        img_ram_hist = grab(self.chart_ram_hist)
-        
-        self.chart_tabs.setCurrentIndex(1)
-        QApplication.processEvents()
-        img_read = grab(self.chart_read)
-        
-        self.chart_tabs.setCurrentIndex(2)
-        QApplication.processEvents()
-        img_write = grab(self.chart_write)
-        
-        self.chart_tabs.setCurrentIndex(current_tab)
+            temp_path = os.path.join(os.environ.get('TEMP', '.'), f"temp_mem_dossier_{int(time.time())}.pdf")
+            printer.setOutputFileName(temp_path)
 
-        img_flow = grab(self.flow_diagram)
-        img_ram_donut = grab(self.donut_ram)
-        img_swap_donut = grab(self.donut_swap)
-        img_disk_pie = grab(self.disk_chart)
+            mem = psutil.virtual_memory()
+            swap = psutil.swap_memory()
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        # System Info Data
-        sys_info = f"""
-        <table width="100%" border="0">
-            <tr><td><b>OS:</b> {self.info_os.lbl_value.text()}</td><td><b>Uptime:</b> {self.info_uptime.lbl_value.text()}</td></tr>
-            <tr><td><b>Host:</b> {self.info_host.lbl_value.text()}</td><td><b>Kernel:</b> {self.info_kernel.lbl_value.text()}</td></tr>
-            <tr><td><b>CPU:</b> {self.info_cpu.lbl_value.text()}</td><td><b>Arch:</b> {self.info_arch.lbl_value.text()}</td></tr>
-            <tr><td colspan="2"><b>Processor:</b> {self.info_proc.lbl_value.text()}</td></tr>
-            <tr><td><b>Total Mem:</b> {self.info_mem.lbl_value.text()}</td><td><b>Total Swap:</b> {self.info_swap.lbl_value.text()}</td></tr>
-        </table>
-        """
+            # Collect processes
+            procs = sorted(
+                psutil.process_iter(['pid', 'name', 'memory_info']),
+                key=lambda p: (p.info['memory_info'].rss if p.info.get('memory_info') else 0),
+                reverse=True
+            )[:12]
 
-        # Key Metrics
-        metrics = f"""
-        <p>
-        <b>Total RAM:</b> {self.card_total.lbl_value.text()} | 
-        <b>Used RAM:</b> {self.card_used.lbl_value.text()} | 
-        <b>Available:</b> {self.card_avail.lbl_value.text()} | 
-        <b>Swap Used:</b> {self.card_swap.lbl_value.text()}
-        </p>
-        """
-        
-        html = f"""
-        <html>
-        <head>
-            <style>
-                body {{ font-family: sans-serif; }}
-                h1 {{ color: #0078d7; }}
-                h2 {{ color: #333; border-bottom: 1px solid #ccc; padding-bottom: 5px; margin-top: 20px; }}
-                table {{ font-size: 10pt; }}
-            </style>
-        </head>
-        <body>
-            <h1 align="center">Memory Information Report</h1>
-            <p align="center">Generated: {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
-            
-            <h2>Memory Information</h2>
-            {sys_info}
-            
-            <h2>Resource Flow</h2>
-            <div align="center"><img src="data:image/png;base64,{img_flow}" width="600"></div>
-            
-            <h2>Memory Statistics</h2>
-            {metrics}
-            <table width="100%">
+            proc_rows = ""
+            for p in procs:
+                rss = p.info['memory_info'].rss if p.info.get('memory_info') else 0
+                share = (rss / mem.total * 100) if mem.total > 0 else 0
+                proc_rows += f"""
                 <tr>
-                    <td align="center"><img src="data:image/png;base64,{img_ram_donut}" width="200"></td>
-                    <td align="center"><img src="data:image/png;base64,{img_swap_donut}" width="200"></td>
+                    <td align="center">{p.info['pid']}</td>
+                    <td><b>{p.info['name'] or 'Unknown'}</b></td>
+                    <td align="right">{self._fmt(rss)}</td>
+                    <td align="center">{share:.1f}%</td>
                 </tr>
-            </table>
-            <h3>RAM Usage History</h3>
-            <div align="center"><img src="data:image/png;base64,{img_ram_hist}" width="600" height="150"></div>
+                """
 
-            <h2>Storage Statistics</h2>
-            <h3>Partitions</h3>
-            {table_to_html(self.disk_table)}
-            <br>
-            <div align="center"><img src="data:image/png;base64,{img_disk_pie}" width="300"></div>
-            
-            <h3>Disk I/O Activity</h3>
-            <table width="100%">
+            disk_rows = ""
+            for p in psutil.disk_partitions():
+                try:
+                    usage = psutil.disk_usage(p.mountpoint)
+                    disk_rows += f"""
+                    <tr>
+                        <td align="center"><b>{p.mountpoint}</b></td>
+                        <td align="right">{self._fmt(usage.total)}</td>
+                        <td align="right">{self._fmt(usage.free)}</td>
+                        <td align="center">{usage.percent:.1f}%</td>
+                        <td align="center">{p.fstype}</td>
+                    </tr>
+                    """
+                except Exception:
+                    continue
+
+            html = f"""<!DOCTYPE html>
+            <html>
+            <head>
+              <meta charset="utf-8">
+              <style>
+                body {{ font-family: 'Segoe UI', Arial, sans-serif; font-size: 9pt; color: #1e293b; line-height: 1.4; }}
+                h1 {{ font-size: 16pt; color: #0284c7; margin: 0; padding-bottom: 2px; }}
+                h2 {{ font-size: 11pt; color: #0f172a; margin-top: 14px; margin-bottom: 6px; border-bottom: 1px solid #0284c7; padding-bottom: 3px; }}
+                table {{ width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 8.5pt; }}
+                th {{ background-color: #f1f5f9; color: #475569; padding: 5px 8px; text-align: left; border: 1px solid #cbd5e1; }}
+                td {{ padding: 5px 8px; border: 1px solid #e2e8f0; }}
+                .kpi-box {{ border: 1px solid #bae6fd; background-color: #f0f9ff; padding: 10px; border-radius: 6px; margin-top: 8px; }}
+              </style>
+            </head>
+            <body>
+              <table width="100%" cellspacing="0" cellpadding="0" style="border:none; margin-bottom: 8px; border-bottom: 2px solid #0284c7; padding-bottom: 4px;">
                 <tr>
-                    <td align="center"><b>Read Speed</b><br><img src="data:image/png;base64,{img_read}" width="300" height="120"></td>
-                    <td align="center"><b>Write Speed</b><br><img src="data:image/png;base64,{img_write}" width="300" height="120"></td>
+                  <td>
+                    <h1>NexaShield Memory & Storage Forensic Dossier</h1>
+                    <div style="font-size: 8.5pt; color: #64748b; margin-top: 2px;">
+                      Host: <b>{platform.node()}</b> &nbsp;|&nbsp; OS: <b>{platform.system()} {platform.release()} ({platform.machine()})</b> &nbsp;|&nbsp; Generated: <b>{timestamp}</b>
+                    </div>
+                  </td>
                 </tr>
-            </table>
+              </table>
 
-            <h2>Top Memory Consumers</h2>
-            {table_to_html(self.proc_table)}
-        </body>
-        </html>
-        """
-        doc = QTextDocument()
-        doc.setHtml(html)
-        doc.print(printer)
-        
-        with open(temp_path, "rb") as f:
-            pdf_bytes = f.read()
-        os.remove(temp_path)
-        
-        if self.session and hasattr(self.session, 'file_manager'):
-            self.session.file_manager.export_file(
-                filename="MemoryReport.pdf",
-                content=pdf_bytes,
-                module_source="Memory Monitor",
-                file_type="PDF",
-                tags="Routine"
-            )
-            QMessageBox.information(self, "Vaulted", "Memory Report PDF securely vaulted in FMS.")
-        else:
-            QMessageBox.warning(self, "Warning", "FMS not available.")
+              <!-- Executive Memory & Hardware Dossier Table -->
+              <div class="kpi-box">
+                <table width="100%" style="border:none;">
+                  <tr>
+                    <td style="border:none;"><b>Processor:</b> {platform.processor()}</td>
+                    <td style="border:none;"><b>Logical CPU Cores:</b> {psutil.cpu_count(logical=True)} Cores</td>
+                    <td style="border:none;"><b>System Uptime:</b> {self.info_uptime.lbl_value.text()}</td>
+                  </tr>
+                  <tr>
+                    <td style="border:none;"><b>Total Physical RAM:</b> {self._fmt(mem.total)}</td>
+                    <td style="border:none;"><b>Used RAM:</b> {self._fmt(mem.used)} ({mem.percent}%)</td>
+                    <td style="border:none;"><b>Available RAM:</b> {self._fmt(mem.available)}</td>
+                  </tr>
+                  <tr>
+                    <td style="border:none;"><b>Total Virtual Swap:</b> {self._fmt(swap.total)}</td>
+                    <td style="border:none;"><b>Swap Used:</b> {self._fmt(swap.used)} ({swap.percent}%)</td>
+                    <td style="border:none;"><b>System Commit Limit:</b> {self.info_commit_limit.lbl_value.text()}</td>
+                  </tr>
+                </table>
+              </div>
+
+              <h2>Top Memory Consuming Working Sets</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th width="12%" align="center">PID</th>
+                    <th>Process Name</th>
+                    <th width="25%" align="right">Physical Memory (RSS)</th>
+                    <th width="15%" align="center">RAM Share</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {proc_rows}
+                </tbody>
+              </table>
+
+              <h2>Storage Partition Allocations</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th width="15%" align="center">Drive</th>
+                    <th width="20%" align="right">Total Size</th>
+                    <th width="20%" align="right">Free Space</th>
+                    <th width="20%" align="center">Usage %</th>
+                    <th width="25%" align="center">File System</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {disk_rows}
+                </tbody>
+              </table>
+            </body>
+            </html>
+            """
+
+            doc = QTextDocument()
+            doc.setPageSize(QSizeF(printer.pageRect(QPrinter.Unit.Point).size()))
+            doc.setHtml(html)
+            doc.print(printer)
+
+            with open(temp_path, "rb") as f:
+                pdf_bytes = f.read()
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+            filename = f"Memory_Dossier_{time.strftime('%Y%m%d_%H%M%S')}.pdf"
+            if self.session and hasattr(self.session, 'file_manager'):
+                self.session.file_manager.export_file(
+                    filename=filename,
+                    content=pdf_bytes,
+                    module_source="Memory Intelligence",
+                    file_type="PDF",
+                    tags="Memory,Forensics,Hardware,Storage"
+                )
+                self.btn_export.setText("✓ Vaulted in FMS!")
+                QMessageBox.information(
+                    self, "Dossier Vaulted",
+                    f"Memory & Storage Forensic Dossier successfully generated as an executive PDF and vaulted in NexaShield FMS.\n\nFile: {filename}\nSource: Memory Intelligence"
+                )
+                QTimer.singleShot(2500, lambda: self.btn_export.setText("📥 Export Dossier"))
+            else:
+                save_path, _ = QFileDialog.getSaveFileName(self, "Save Memory Forensic Dossier", filename, "PDF Files (*.pdf)")
+                if save_path:
+                    with open(save_path, "wb") as f:
+                        f.write(pdf_bytes)
+                    QMessageBox.information(self, "Dossier Saved", f"Memory dossier saved to:\n{save_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", f"Failed to generate Memory Dossier PDF:\n{str(e)}")
 
     def _toggle_auto(self, state):
         if state:
@@ -979,6 +1491,7 @@ class MemoryMonitorWidget(QWidget):
     @staticmethod
     def _fmt(n):
         for u in ["B", "KB", "MB", "GB", "TB"]:
-            if n < 1024: return f"{n:.2f} {u}"
+            if n < 1024:
+                return f"{n:.2f} {u}"
             n /= 1024
         return f"{n:.2f} PB"
