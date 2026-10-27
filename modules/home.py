@@ -206,6 +206,40 @@ class HomeWindow(QMainWindow):
         # Immediately activate Tab 0 (SIEM Dashboard) smoothly
         self.switch_tab(0)
 
+        # Preload the Process tab in the background immediately upon login
+        QTimer.singleShot(50, self.preload_process_tab)
+
+    def preload_process_tab(self):
+        """Preloads and starts the Process tab in the background right after login."""
+        try:
+            process_idx = 1  # "⚡ Processes"
+            if self.tab_instances[process_idx] is None:
+                creator = self.module_definitions[process_idx][2]
+                widget = creator()
+                self.tab_instances[process_idx] = widget
+                
+                # Replace the placeholder widget
+                old_widget = self.content_area.widget(process_idx)
+                self.content_area.removeWidget(old_widget)
+                if old_widget:
+                    old_widget.deleteLater()
+                self.content_area.insertWidget(process_idx, widget)
+                
+                # Ensure background monitoring is running
+                if hasattr(widget, "start_monitoring"):
+                    widget.start_monitoring()
+        except Exception as e:
+            print(f"[-] Error preloading process tab in background: {e}")
+
+    def cleanup(self):
+        """Cleanly stops background monitoring threads and timers across all tabs."""
+        for widget in self.tab_instances:
+            if widget is not None and hasattr(widget, "cleanup"):
+                try:
+                    widget.cleanup()
+                except Exception:
+                    pass
+
     def switch_tab(self, index):
         """Switches the stacked widget and lazily loads tab widgets on demand."""
         if index < 0 or index >= len(self.module_definitions):

@@ -112,6 +112,7 @@ class NexaShieldApp(QMainWindow):
         
         # Clean up home screen resources on logout to release memory
         if self.home_screen is not None:
+            self.home_screen.cleanup()
             self.stack.removeWidget(self.home_screen)
             self.home_screen.deleteLater()
             self.home_screen = None

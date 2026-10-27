@@ -497,6 +497,43 @@ QPushButton#ClearSearchBtn:hover {
     border: 1px solid #ef4444;
 }
 
+QPushButton#BtnFmsDownload {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284c7, stop:1 #2563eb);
+    color: #ffffff;
+    border: 1px solid #38bdf8;
+    border-radius: 7px;
+    font-weight: 700;
+    font-size: 11px;
+    padding: 0px 14px;
+}
+
+QPushButton#BtnFmsDownload:hover {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0369a1, stop:1 #1d4ed8);
+    border: 1px solid #7dd3fc;
+    color: #ffffff;
+}
+
+QPushButton#BtnFmsDownload:pressed {
+    background: #0284c7;
+}
+
+QPushButton#BtnClosePanel {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid #334155;
+    border-radius: 7px;
+    color: #94a3b8;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 0px;
+    margin: 0px;
+}
+
+QPushButton#BtnClosePanel:hover {
+    background: #dc2626;
+    border: 1px solid #ef4444;
+    color: #ffffff;
+}
+
 /* ---------- Cards, Panels & Containers ---------- */
 QFrame#CardContainer, QFrame#Card, QFrame#ConfigCard, QFrame#ChartCard, QFrame#ProcessTableContainer, QFrame#DetailsPanel {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #111726, stop:1 #0e1422);
@@ -972,4 +1009,48 @@ QTreeWidget#HelpTree::item:selected {
 QTreeWidget#HelpTree::item:hover:!selected {
     background-color: rgba(30, 41, 59, 0.6);
     color: #f8fafc;
+}
+
+/* ---------- Process Table Modern Styling ---------- */
+QTableWidget#ProcessTable {
+    background-color: #0b0f17;
+    alternate-background-color: #101726;
+    gridline-color: transparent;
+    border: 1px solid #1e293b;
+    border-radius: 10px;
+    outline: none;
+    selection-background-color: rgba(56, 189, 248, 0.16);
+    selection-color: #f8fafc;
+}
+
+QTableWidget#ProcessTable::item {
+    padding: 2px 6px;
+    border-bottom: 1px solid rgba(30, 41, 59, 0.4);
+    color: #e2e8f0;
+}
+
+QTableWidget#ProcessTable::item:selected {
+    background-color: rgba(56, 189, 248, 0.18);
+    color: #38bdf8;
+}
+
+QTableWidget#ProcessTable::item:hover:!selected {
+    background-color: rgba(30, 41, 59, 0.35);
+}
+
+QHeaderView::section {
+    background-color: #0b0f17;
+    color: #94a3b8;
+    padding: 8px 6px;
+    border: none;
+    border-bottom: 2px solid #1e293b;
+    font-weight: 700;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+QHeaderView::section:hover {
+    background-color: #111827;
+    color: #38bdf8;
 }
