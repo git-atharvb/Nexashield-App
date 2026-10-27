@@ -153,7 +153,7 @@ QComboBox {
     background-color: #161f32;
     border: 1px solid #25334d;
     border-radius: 8px;
-    padding: 8px 12px;
+    padding: 4px 28px 4px 10px;
     color: #f8fafc;
     font-size: 10pt;
     font-weight: 500;
@@ -532,6 +532,28 @@ QPushButton#BtnClosePanel:hover {
     background: #dc2626;
     border: 1px solid #ef4444;
     color: #ffffff;
+}
+
+QPushButton#BtnModeToggle {
+    background: rgba(255, 255, 255, 0.05);
+    color: #94a3b8;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 11px;
+    padding: 0px 12px;
+}
+
+QPushButton#BtnModeToggle:hover {
+    background: rgba(56, 189, 248, 0.1);
+    color: #38bdf8;
+    border: 1px solid #38bdf8;
+}
+
+QPushButton#BtnModeToggle:checked {
+    background: #0284c7;
+    color: #ffffff;
+    border: 1px solid #38bdf8;
 }
 
 /* ---------- Cards, Panels & Containers ---------- */

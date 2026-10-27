@@ -206,8 +206,9 @@ class HomeWindow(QMainWindow):
         # Immediately activate Tab 0 (SIEM Dashboard) smoothly
         self.switch_tab(0)
 
-        # Preload the Process tab in the background immediately upon login
+        # Preload the Process & Network tabs in the background immediately upon login
         QTimer.singleShot(50, self.preload_process_tab)
+        QTimer.singleShot(150, self.preload_network_tab)
 
     def preload_process_tab(self):
         """Preloads and starts the Process tab in the background right after login."""
@@ -230,6 +231,26 @@ class HomeWindow(QMainWindow):
                     widget.start_monitoring()
         except Exception as e:
             print(f"[-] Error preloading process tab in background: {e}")
+
+    def preload_network_tab(self):
+        """Preloads and starts the Network tab in the background right after login."""
+        try:
+            network_idx = 2  # "🌐 Network"
+            if self.tab_instances[network_idx] is None:
+                creator = self.module_definitions[network_idx][2]
+                widget = creator()
+                self.tab_instances[network_idx] = widget
+                
+                old_widget = self.content_area.widget(network_idx)
+                self.content_area.removeWidget(old_widget)
+                if old_widget:
+                    old_widget.deleteLater()
+                self.content_area.insertWidget(network_idx, widget)
+                
+                if hasattr(widget, "start_monitoring"):
+                    widget.start_monitoring()
+        except Exception as e:
+            print(f"[-] Error preloading network tab in background: {e}")
 
     def cleanup(self):
         """Cleanly stops background monitoring threads and timers across all tabs."""

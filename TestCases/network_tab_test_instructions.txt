@@ -1,0 +1,234 @@
+================================================================================
+           NEXASHIELD ENDPOINT DEFENSE - NETWORK TAB VERIFICATION SUITE
+                     Step-by-Step Guide for Project Demonstration
+================================================================================
+
+DOCUMENT PURPOSE:
+This guide provides an end-to-end testing script that you can directly follow
+to demonstrate every advancement, intelligence mechanism, and visual telemetry
+feature of the NexaShield Network Intelligence & Forensic Analysis Module to
+your project guide.
+
+--------------------------------------------------------------------------------
+PREREQUISITES:
+--------------------------------------------------------------------------------
+1. Start the application:
+   Open terminal in project root and run:
+   > python modules/main.py
+
+2. Log in using your registered credentials.
+
+================================================================================
+TEST CASE 1: INSTANT LOGIN-TIME BACKGROUND PRELOADING
+================================================================================
+Objective:
+Verify that network telemetry, adapter counters, and sockets begin caching
+immediately at login, completely eliminating tab-switch lag.
+
+Steps:
+1. Log into NexaShield.
+2. From the Home screen, click on the "🌐 Network" tab.
+3. Expected Result:
+   - Sockets, adapter metrics, and live charts render instantly.
+   - Zero stutter or frozen UI.
+
+================================================================================
+TEST CASE 2: REAL-TIME CYBER TELEMETRY & BÉZIER THROUGHPUT CHARTS
+================================================================================
+Objective:
+Demonstrate the live hardware throughput monitors and protocol breakdown.
+
+Steps:
+1. Look at the top "📊 Real-Time Network Intelligence & Telemetry" dashboard:
+   - "⬇️ Inbound Throughput" & "⬆️ Outbound Throughput":
+     * Notice the smooth cubic Bézier curves dynamically plotting live B/s,
+       KB/s, or MB/s.
+     * Notice the glowing radial lead dots and subtle gradient fill.
+     * Peak throughput watermark displayed in the corner.
+   - "🔌 Protocol Breakdown":
+     * Modern donut chart showing the live distribution of protocols.
+     * Hover mouse over any colored slice: an informative tooltip pops up
+       showing the exact socket count and percentage share.
+     * Center text displays the total active sockets count.
+   - "Adapter & Host Identity Card":
+     * Displays adapter name, IP address, MAC address, total bytes sent/recv,
+       and packet error/drop counts.
+2. Click "📊 Dashboard" in the toolbar:
+   - The top telemetry drawer collapses to give full screen height to the
+     connections table.
+   - Click "📊 Dashboard" again to expand it back.
+
+================================================================================
+TEST CASE 3: ACTIVE SOCKETS VS. ATTACK SURFACE (OPEN LISTENING PORTS)
+================================================================================
+Objective:
+Demonstrate the vulnerability attack surface scanner and live socket tracking.
+
+Steps:
+1. By default, "🔗 Active Sockets" is active:
+   - Shows all active outbound/inbound connections established by processes.
+   - Note the status badges (● ESTABLISHED, ● TIME_WAIT, ● CLOSE_WAIT).
+2. Click "🛡 Attack Surface (Open Ports)":
+   - The button highlights orange.
+   - The table immediately filters to all local ports currently in LISTEN state
+     (TCP listening daemons & UDP listening sockets).
+   - Points out exposed services (e.g. RPC 135, SMB 445, RDP 3389, Web 80/443).
+3. Switch back to "🔗 Active Sockets".
+
+================================================================================
+TEST CASE 3B: MULTI-PROTOCOL FILTERING & PACKET MONITORING
+================================================================================
+Objective:
+Verify comprehensive monitoring and tracking across all protocols and packet types.
+
+Steps:
+1. In the toolbar, click the "🔌 Proto:" dropdown:
+   - Notice the complete protocol spectrum:
+     * All Protocols
+     * TCP
+     * UDP
+     * HTTPS (TCP & QUIC/HTTP3 UDP)
+     * HTTP
+     * DNS (Domain Name Resolution)
+     * SSH (Secure Shell)
+     * RDP (Remote Desktop Protocol)
+     * SMB (Server Message Block / NetBIOS)
+     * DB (Relational & NoSQL Databases: MySQL, Postgres, MSSQL, Redis, Mongo)
+     * ICMP (Raw packet telemetry)
+2. Select "TCP":
+   - The table filters to show all TCP sockets.
+3. Select "UDP":
+   - The table updates to show all UDP active transmissions or listening sockets.
+4. Select "HTTPS":
+   - Shows encrypted web and API traffic.
+5. Select "All Protocols":
+   - Restores the entire real-time socket table.
+6. Check the "🌐 NIC:" dropdown:
+   - By default shows "All Interfaces" with aggregate network throughput and total
+     packet counters (Sent/Recv, Drops, and Errors).
+   - Switch to "Wi-Fi" or "Ethernet" to view adapter-specific hardware telemetry.
+
+================================================================================
+TEST CASE 4: REAL-WORLD GEOIP & ASN CLOUD INTELLIGENCE
+================================================================================
+Objective:
+Demonstrate that NexaShield enriches raw remote IPs with real-world context.
+
+Steps:
+1. In the Active Connections table, observe column 5: "GEO / PROVIDER":
+   - Notice country flags (🇺🇸 US, 🇨🇭 CH, 🌐 WAN) and provider classifications:
+     * Google Cloud / Services
+     * Cloudflare Edge CDN
+     * Microsoft Azure Cloud
+     * Amazon Web Services (AWS)
+     * Akamai Technologies CDN
+     * Private Local Network (LAN)
+2. In column 4 ("REMOTE SOCKET & HOST"):
+   - Notice cached reverse DNS hostnames (e.g. `142.250.x.x (google.com)`).
+
+================================================================================
+TEST CASE 5: AI NETWORK THREAT SCORING & CYBER-BADGES
+================================================================================
+Objective:
+Demonstrate automated threat classification (L1 through L5) for every socket.
+
+Steps:
+1. Observe the "AI THREAT" column:
+   - High-tech angular badges with prominent neon left indicator bars:
+     * 'L1 ◆ VERIFIED'  (Green)   - Internal loopback & verified infrastructure.
+     * 'L2 ◆ NORMAL'    (Cyan)    - Standard outbound web & DNS traffic.
+     * 'L3 ◆ SUSPICIOUS'(Amber)   - Non-standard ephemeral ports to unknown WANs.
+     * 'L4 ◆ HIGH RISK' (Orange)  - Potential attack surfaces (IRC, Mining, Telnet).
+     * 'L5 ◆ CRITICAL'  (Red)     - Known Metasploit/C2 defaults (4444, 1337).
+2. Test the Threat Filter:
+   - Click "🛡️ Risk:" dropdown in toolbar.
+   - Select "Safe Only (L1-L2)" -> Filters to verified traffic.
+   - Select "All Threat Levels" -> Returns to complete table.
+
+================================================================================
+TEST CASE 6: DEEP SOCKET INTELLIGENCE DOSSIER DRAWER
+================================================================================
+Objective:
+Demonstrate full forensic investigation on any active network connection.
+
+Steps:
+1. Click on any connection in the table on the left (e.g. a browser or background service).
+2. The 440px "🔬 Socket Intelligence Dossier" slide-out panel opens on the right.
+3. Review the forensic breakdown:
+   a) AI Threat Assessment Banner:
+      - Clean theme-aware alert card (pastel alert tints with high-contrast text in Light Mode, deep cyber tint in Dark Mode).
+      - Threat classification tag, confidence score, and dynamic behavioral
+        reasoning explaining why the socket was evaluated as such.
+   b) Endpoint Process Association:
+      - Process name, PID, user context.
+      - Full executable path and live cryptographic SHA-256 hash.
+      - Binary disk size and parent process lineage.
+   c) Network & Infrastructure Telemetry:
+      - Local socket, remote socket, reverse DNS hostname, country flag,
+        organization / cloud provider, and port purpose description.
+
+================================================================================
+TEST CASE 7: FORENSIC REPORT PDF GENERATION & FMS VAULTING
+================================================================================
+Objective:
+Demonstrate direct PDF forensic report generation and automated vaulting into
+the NexaShield File Management System (FMS).
+
+Steps:
+1. With a socket selected in the forensics panel, click "📥 Save to FMS"
+   (top-right of the drawer).
+2. Expected Result:
+   - Button turns to "✓ Saved to FMS!".
+   - A success dialog appears:
+     "Network forensic report for '<proc_name>' successfully generated as an
+      executive PDF and vaulted in NexaShield FMS.
+      File: <proc_name>_net_<port>_report.pdf
+      Source: Network Forensics"
+3. Click OK on the dialog.
+
+================================================================================
+TEST CASE 8: VERIFYING VAULTED REPORT IN FMS IN-APP VIEWER
+================================================================================
+Objective:
+Demonstrate the generated network forensic PDF inside the FMS Zero-Trust Vault.
+
+Steps:
+1. Navigate to the "FMS" (File Management System) tab on the left sidebar.
+2. In the FMS table, look at the top row:
+   - File Name: `<proc_name>_net_<port>_report.pdf`
+   - Source: `Network Forensics`
+   - Type: `PDF`
+3. Click on that row:
+   - The In-App Rich Previewer displays the executive PDF report.
+4. Verify:
+   - Clean title: "NexaShield Network Socket Forensic Report"
+   - AI Verdict Banner with color-coded severity.
+   - Clean, high-contrast tables for Process Association and Network Telemetry.
+   - Zero black line distortion, crisp and readable.
+
+================================================================================
+TEST CASE 9: MITIGATION CONTROLS (TERMINATE PROCESS & ISOLATE IP)
+================================================================================
+Objective:
+Demonstrate active endpoint response capabilities directly from the Network tab.
+
+Steps:
+1. In the Forensics drawer, look at the bottom action buttons:
+   - "⛔ Kill Process"
+   - "🛡 Block Remote IP"
+2. Test "🛡 Block Remote IP":
+   - Confirmation dialog asks to isolate the remote IP from all traffic.
+   - Confirming logs the isolation event to the SIEM / Event Log.
+
+================================================================================
+DEMO SUMMARY TALKING POINTS FOR YOUR GUIDE:
+================================================================================
+1. "Autonomous GeoIP & ASN Intelligence": Every connection is automatically
+   mapped to cloud providers, reverse DNS domains, and countries in real time.
+2. "Automated Threat Heuristics": AI scoring evaluates port behaviors,
+   ephemeral channels, and known adversary C2 defaults (L1 to L5).
+3. "Dual-Mode Attack Surface Auditing": Instantly toggles between active
+   transmissions and exposed listening ports to audit endpoint vulnerability.
+4. "Forensic Continuity": Correlates network sockets directly to binary SHA-256
+   hashes, user privileges, and vaulted executive PDF reports in FMS.
+================================================================================
