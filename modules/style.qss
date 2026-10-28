@@ -557,7 +557,7 @@ QPushButton#BtnModeToggle:checked {
 }
 
 /* ---------- Cards, Panels & Containers ---------- */
-QFrame#CardContainer, QFrame#Card, QFrame#ConfigCard, QFrame#ChartCard, QFrame#ProcessTableContainer, QFrame#DetailsPanel {
+QFrame#CardContainer, QFrame#Card, QFrame#ConfigCard, QFrame#ChartCard, QFrame#ProcessTableContainer, QFrame#DetailsPanel, QFrame#PhishingDossier {
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #111726, stop:1 #0e1422);
     border: 1px solid #1e293b;
     border-radius: 14px;

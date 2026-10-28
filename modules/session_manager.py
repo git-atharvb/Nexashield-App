@@ -86,6 +86,40 @@ class SessionManager:
                 file_hash TEXT
             )
         """)
+
+        # Permanent Phishing Intelligence Tables
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS phishing_scans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL,
+                normalized_url TEXT,
+                final_url TEXT,
+                threat_level TEXT NOT NULL,
+                score REAL NOT NULL,
+                heuristic_score REAL,
+                ml_score REAL,
+                method TEXT,
+                timestamp TEXT NOT NULL,
+                scan_duration REAL DEFAULT 0.0,
+                domain TEXT,
+                resolved_ip TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS phishing_scan_details (
+                scan_id INTEGER PRIMARY KEY,
+                url_anatomy TEXT,
+                heuristic_results TEXT,
+                ml_results TEXT,
+                redirect_chain TEXT,
+                domain_intel TEXT,
+                ssl_analysis TEXT,
+                http_analysis TEXT,
+                content_analysis TEXT,
+                raw_reasons TEXT,
+                FOREIGN KEY (scan_id) REFERENCES phishing_scans(id) ON DELETE CASCADE
+            )
+        """)
         
         conn.commit()
         conn.close()

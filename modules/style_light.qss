@@ -557,7 +557,7 @@ QPushButton#BtnModeToggle:checked {
 }
 
 /* ---------- Cards, Panels & Containers ---------- */
-QFrame#CardContainer, QFrame#Card, QFrame#ConfigCard, QFrame#ChartCard, QFrame#ProcessTableContainer, QFrame#DetailsPanel {
+QFrame#CardContainer, QFrame#Card, QFrame#ConfigCard, QFrame#ChartCard, QFrame#ProcessTableContainer, QFrame#DetailsPanel, QFrame#PhishingDossier {
     background: #ffffff;
     border: 1px solid #e2e8f0;
     border-radius: 14px;
