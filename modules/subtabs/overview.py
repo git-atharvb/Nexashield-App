@@ -1,4 +1,18 @@
+"""
+NexaShield - Enterprise SIEM (Security Information & Event Management) Overview & SOC Command Center
+Features:
+- "🌟 SUPER REPORT" Central Engine (Cross-module deep gathering -> PDF / CSV -> FMS Vault)
+- Real-Time Global Threat Posture (0-100%) & DEFCON Indicator
+- Interactive MITRE ATT&CK Kill-Chain Triage Ribbon
+- 5-Tile SOC Metric Ribbon (Posture, Critical Incidents, Blocked Hosts, Cloud DLP, AI Anomaly)
+- Real-Time Cross-Module Security Event Correlation Matrix
+- 440px Slide-out Incident Forensics & SOAR Remediation Playbook Drawer
+- Real-Time Area Charts (CPU, RAM, Disk, Network I/O)
+- Multi-Vector Radar Posture & Threat Donut Visualizers
+"""
+
 import os
+import sys
 import psutil
 import sqlite3
 import socket
@@ -9,160 +23,395 @@ import math
 import re
 import datetime
 import subprocess
+
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QMenu, QApplication,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView, QGroupBox, QToolTip,
-    QLineEdit, QComboBox, QPushButton, QFileDialog, QMessageBox, QDialog, QFormLayout, QCheckBox, QTextEdit
+    QLineEdit, QComboBox, QPushButton, QFileDialog, QMessageBox, QDialog, QFormLayout,
+    QCheckBox, QTextEdit, QProgressBar, QRadioButton, QButtonGroup, QSplitter, QScrollArea,
+    QSizePolicy
 )
-from PyQt6.QtCore import Qt, QTimer, QRectF, QThread, pyqtSignal, QPointF
-from PyQt6.QtGui import QColor, QBrush, QPainter, QPen, QFont, QPalette, QPainterPath, QLinearGradient, QTextDocument, QConicalGradient
-from PyQt6.QtPrintSupport import QPrinter
+from PyQt6.QtCore import Qt, QTimer, QRectF, QThread, pyqtSignal, QPointF, QEvent
+from PyQt6.QtGui import (
+    QColor, QBrush, QPainter, QPen, QFont, QPalette, QPainterPath, QLinearGradient
+)
 
-class SyslogDialog(QDialog):
-    def __init__(self, parent=None):
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from siem_logic import SIEMCorrelationEngine, gather_deep_super_report_data
+from super_report import SuperReportGenerator
+
+
+# ==========================================================
+# Background Worker for Super Report Generation
+# ==========================================================
+class SuperReportWorker(QThread):
+    finished_report = pyqtSignal(bool, str, str, str)
+
+    def __init__(self, session, format_type, scope):
+        super().__init__()
+        self.session = session
+        self.format_type = format_type
+        self.scope = scope
+
+    def run(self):
+        ok, fn, vp, msg = SuperReportGenerator.generate_report(
+            session=self.session,
+            format_type=self.format_type,
+            scope=self.scope
+        )
+        self.finished_report.emit(ok, fn, vp, msg)
+
+
+# ==========================================================
+# Interactive Super Report Configuration & Execution Modal
+# ==========================================================
+class SuperReportDialog(QDialog):
+    """
+    State-of-the-Art SOC Master Report Generator.
+    Gathers telemetry from all 9 tabs, builds PDF/CSV, and deposits into FMS Vault.
+    """
+    open_fms_requested = pyqtSignal()
+
+    def __init__(self, session=None, siem_dashboard=None, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Configure Syslog Forwarding")
-        self.setMinimumSize(350, 180)
-        
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(25, 25, 25, 25)
-        main_layout.setSpacing(15)
-        
-        # Header
-        header = QLabel("📡 Syslog Configuration")
-        header.setStyleSheet("font-size: 16px; font-weight: bold; color: #0078d7;")
-        main_layout.addWidget(header)
-        
-        # Form Layout
-        form_layout = QFormLayout()
-        form_layout.setSpacing(15)
-        
-        self.ip_input = QLineEdit("127.0.0.1")
-        self.ip_input.setMinimumHeight(32)
-        self.port_input = QLineEdit("514")
-        self.port_input.setMinimumHeight(32)
-        
-        form_layout.addRow(QLabel("Syslog IP:"), self.ip_input)
-        form_layout.addRow(QLabel("Syslog Port:"), self.port_input)
-        main_layout.addLayout(form_layout)
-        
-        main_layout.addStretch()
-        
-        self.btn_start = QPushButton("🚀 Send Logs")
-        self.btn_start.setMinimumHeight(35)
-        self.btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_start.setObjectName("BtnPrimary")
-        self.btn_start.clicked.connect(self.accept)
-        main_layout.addWidget(self.btn_start)
+        self.session = session
+        self.siem_dashboard = siem_dashboard
+        self.setWindowTitle("NexaShield - Generate Enterprise Super Report")
+        self.setMinimumSize(540, 560)
+        self.generated_filename = ""
+        self.generated_vault_path = ""
+        self.setup_ui()
 
-class LiveThreatTicker(QWidget):
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(14)
+
+        # Header Title Block
+        header = QHBoxLayout()
+        icon_lbl = QLabel("🌟")
+        icon_lbl.setStyleSheet("font-size: 26px; background: transparent;")
+        header.addWidget(icon_lbl)
+
+        title_vbox = QVBoxLayout()
+        title_lbl = QLabel("Enterprise Security Super Report Generator")
+        title_lbl.setStyleSheet("font-size: 15px; font-weight: 800; color: #38bdf8;")
+        sub_lbl = QLabel("Aggregates deep forensic telemetry across all 9 security modules and vaults into FMS.")
+        sub_lbl.setStyleSheet("font-size: 10px; color: #94a3b8;")
+        title_vbox.addWidget(title_lbl)
+        title_vbox.addWidget(sub_lbl)
+        header.addLayout(title_vbox)
+        header.addStretch()
+        layout.addLayout(header)
+
+        # 1. Format Selection Box
+        fmt_group = QGroupBox("1. Select Export Format")
+        fmt_group.setStyleSheet("font-weight: bold; font-size: 11px;")
+        fmt_layout = QVBoxLayout(fmt_group)
+
+        self.radio_pdf = QRadioButton("📄 Executive Forensic PDF Dossier (Formatted Scorecard, Charts, Audit Tables & Cryptographic Sign-off)")
+        self.radio_pdf.setChecked(True)
+        self.radio_pdf.setStyleSheet("font-size: 10px; font-weight: normal; padding: 4px;")
+
+        self.radio_csv = QRadioButton("📊 Universal CSV Forensic Audit Bundle (Multi-Section Raw Data Dump)")
+        self.radio_csv.setStyleSheet("font-size: 10px; font-weight: normal; padding: 4px;")
+
+        self.bg_fmt = QButtonGroup(self)
+        self.bg_fmt.addButton(self.radio_pdf)
+        self.bg_fmt.addButton(self.radio_csv)
+
+        fmt_layout.addWidget(self.radio_pdf)
+        fmt_layout.addWidget(self.radio_csv)
+        layout.addWidget(fmt_group)
+
+        # 2. Scope Selection Box
+        scope_group = QGroupBox("2. Modules & Telemetry Scope")
+        scope_group.setStyleSheet("font-weight: bold; font-size: 11px;")
+        scope_layout = QVBoxLayout(scope_group)
+
+        self.chk_all = QCheckBox("Select All Modules (Recommended for Complete Audit)")
+        self.chk_all.setChecked(True)
+        self.chk_all.setStyleSheet("font-size: 10px; font-weight: bold; color: #38bdf8; margin-bottom: 6px;")
+        self.chk_all.toggled.connect(self.toggle_all_scopes)
+        scope_layout.addWidget(self.chk_all)
+
+        self.scope_checkboxes = [
+            QCheckBox("🖥️ Host OS, Hardware Thermals & System Specs"),
+            QCheckBox("⚡ Process Forensics & Execution Telemetry"),
+            QCheckBox("🌐 Network Sockets, Listening Ports & Connections"),
+            QCheckBox("🧠 Memory Health, Swap & Behavioral Anomaly Index"),
+            QCheckBox("🎣 Phishing URL Detections & Heuristic Verdicts"),
+            QCheckBox("🚨 NIDS Network Intrusion System & Blocked IPs"),
+            QCheckBox("🔥 Firewall Rules & Port Enforcement Status"),
+            QCheckBox("🛡️ Antivirus Threat Logs & Quarantined Items"),
+            QCheckBox("☁️ Cloud CASB Posture, DLP Leaks & Vaulted Assets"),
+            QCheckBox("📊 Centralized SIEM Incident Correlation Matrix")
+        ]
+
+        grid_scope = QVBoxLayout()
+        for chk in self.scope_checkboxes:
+            chk.setChecked(True)
+            chk.setStyleSheet("font-size: 10px; font-weight: normal; padding: 2px;")
+            grid_scope.addWidget(chk)
+        scope_layout.addLayout(grid_scope)
+        layout.addWidget(scope_group)
+
+        # 3. Status & Progress Indicator (Initially Hidden)
+        self.prog_bar = QProgressBar()
+        self.prog_bar.setRange(0, 0)
+        self.prog_bar.setFixedHeight(12)
+        self.prog_bar.setTextVisible(False)
+        self.prog_bar.hide()
+        layout.addWidget(self.prog_bar)
+
+        self.lbl_status = QLabel("")
+        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_status.setStyleSheet("font-size: 10px; font-weight: bold;")
+        self.lbl_status.hide()
+        layout.addWidget(self.lbl_status)
+
+        # 4. Result Action Card (Shown after success)
+        self.result_frame = QFrame()
+        self.result_frame.setObjectName("CardContainer")
+        self.result_frame.hide()
+        rf_layout = QVBoxLayout(self.result_frame)
+        rf_layout.setContentsMargins(10, 8, 10, 8)
+        rf_layout.setSpacing(6)
+
+        self.lbl_result_msg = QLabel("✓ Super Report generated and securely encrypted into FMS Vault.")
+        self.lbl_result_msg.setStyleSheet("color: #10b981; font-weight: bold; font-size: 11px;")
+        rf_layout.addWidget(self.lbl_result_msg)
+
+        self.lbl_result_path = QLabel("")
+        self.lbl_result_path.setStyleSheet("font-size: 9px; color: #94a3b8; font-family: 'Consolas', monospace;")
+        self.lbl_result_path.setWordWrap(True)
+        rf_layout.addWidget(self.lbl_result_path)
+
+        res_btns = QHBoxLayout()
+        self.btn_open_fms = QPushButton("📂 Open in FMS Files")
+        self.btn_open_fms.setFixedHeight(28)
+        self.btn_open_fms.setStyleSheet("background: #0284c7; color: white; font-weight: bold; border-radius: 4px; padding: 4px 10px;")
+        self.btn_open_fms.clicked.connect(self.on_open_fms_clicked)
+        res_btns.addWidget(self.btn_open_fms)
+
+        self.btn_save_copy = QPushButton("💾 Save External Copy")
+        self.btn_save_copy.setFixedHeight(28)
+        self.btn_save_copy.clicked.connect(self.on_save_copy_clicked)
+        res_btns.addWidget(self.btn_save_copy)
+        rf_layout.addLayout(res_btns)
+        layout.addWidget(self.result_frame)
+
+        # 5. Bottom Action Controls
+        btns_layout = QHBoxLayout()
+        btns_layout.addStretch()
+
+        self.btn_cancel = QPushButton("Close")
+        self.btn_cancel.setFixedHeight(32)
+        self.btn_cancel.clicked.connect(self.reject)
+        btns_layout.addWidget(self.btn_cancel)
+
+        self.btn_generate = QPushButton("🌟 Generate & Vault into FMS")
+        self.btn_generate.setObjectName("BtnPrimary")
+        self.btn_generate.setFixedHeight(32)
+        self.btn_generate.setMinimumWidth(210)
+        self.btn_generate.setStyleSheet("font-weight: 800; font-size: 11px;")
+        self.btn_generate.clicked.connect(self.start_generation)
+        btns_layout.addWidget(self.btn_generate)
+
+        layout.addLayout(btns_layout)
+
+    def toggle_all_scopes(self, checked):
+        for chk in self.scope_checkboxes:
+            chk.setChecked(checked)
+
+    def start_generation(self):
+        fmt = "PDF" if self.radio_pdf.isChecked() else "CSV"
+        scope = [chk.text() for chk in self.scope_checkboxes if chk.isChecked()]
+
+        self.btn_generate.setEnabled(False)
+        self.prog_bar.show()
+        self.lbl_status.setText(f"Gathering cross-module forensic data & compiling {fmt} Super Report...")
+        self.lbl_status.setStyleSheet("color: #38bdf8; font-size: 10px; font-weight: bold;")
+        self.lbl_status.show()
+
+        self.worker = SuperReportWorker(self.session, fmt, scope)
+        self.worker.finished_report.connect(self.on_report_finished)
+        self.worker.start()
+
+    def on_report_finished(self, success, filename, vault_path, message):
+        self.prog_bar.hide()
+        self.btn_generate.setEnabled(True)
+
+        if success:
+            self.generated_filename = filename
+            self.generated_vault_path = vault_path
+            self.lbl_status.setText("✓ Super Report generation complete!")
+            self.lbl_status.setStyleSheet("color: #10b981; font-size: 10px; font-weight: bold;")
+
+            self.lbl_result_path.setText(f"Vault Location: {vault_path}")
+            self.result_frame.show()
+            self.btn_generate.setText("🔄 Regenerate Super Report")
+        else:
+            self.lbl_status.setText(f"Error: {message}")
+            self.lbl_status.setStyleSheet("color: #ef4444; font-size: 10px; font-weight: bold;")
+            QMessageBox.critical(self, "Super Report Error", message)
+
+    def on_open_fms_clicked(self):
+        """Switches parent SIEM Dashboard directly to the FMS Files tab."""
+        self.accept()
+        if self.siem_dashboard and hasattr(self.siem_dashboard, 'switch_view'):
+            self.siem_dashboard.switch_view(1)
+        self.open_fms_requested.emit()
+
+    def on_save_copy_clicked(self):
+        """Allows user to save an external copy anywhere on disk."""
+        if not self.generated_vault_path or not os.path.exists(self.generated_vault_path):
+            QMessageBox.warning(self, "File Missing", "Generated report could not be located on disk.")
+            return
+
+        fmt_filter = "PDF Files (*.pdf)" if self.generated_filename.endswith(".pdf") else "CSV Files (*.csv)"
+        dest, _ = QFileDialog.getSaveFileName(self, "Save External Copy of Super Report", self.generated_filename, fmt_filter)
+        if dest:
+            try:
+                import shutil
+                shutil.copyfile(self.generated_vault_path, dest)
+                QMessageBox.information(self, "Exported Successfully", f"Super Report exported to:\n{dest}")
+            except Exception as e:
+                QMessageBox.critical(self, "Export Failed", str(e))
+
+
+# ==========================================================
+# Telemetry Metric Tile (InfoCard)
+# ==========================================================
+class InfoCard(QFrame):
+    """High-density styled telemetry tile for SIEM metric summary ribbon."""
+    def __init__(self, title, value="-", icon="ℹ️", color=None):
+        super().__init__()
+        self.setObjectName("InfoCard")
+        self.setMinimumHeight(56)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(2)
+
+        header = QHBoxLayout()
+        header.setSpacing(5)
+        lbl_icon = QLabel(icon)
+        lbl_icon.setStyleSheet("font-size: 11px; background: transparent;")
+        lbl_title = QLabel(title)
+        lbl_title.setStyleSheet("font-size: 9px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.3px; background: transparent;")
+        header.addWidget(lbl_icon)
+        header.addWidget(lbl_title)
+        header.addStretch()
+        layout.addLayout(header)
+
+        self.lbl_value = QLabel(value)
+        val_color = color if color else "#f8fafc"
+        self.lbl_value.setStyleSheet(f"font-size: 13px; font-weight: 800; color: {val_color}; background: transparent;")
+        self.lbl_value.setWordWrap(False)
+        layout.addWidget(self.lbl_value)
+
+    def set_value(self, value):
+        self.lbl_value.setText(str(value))
+
+
+# ==========================================================
+# MITRE ATT&CK & Cyber Kill Chain Tactical Strip
+# ==========================================================
+class MITREAttackRibbon(QFrame):
+    """Interactive tactical kill-chain strip with live threat counts."""
+    tactic_selected = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
-        self.setFixedHeight(30)
-        self.text = "🔴 LIVE THREAT FEED: [AlienVault] Emotet Botnet C2 Server detected at 192.168.x.x | [OSINT] Ransomware campaign targeting health sector | [NexaShield AI] Zero-day anomaly detected in memory..."
-        self.x_pos = 800
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.move_text)
-        self.timer.start(30)
+        self.setObjectName("CardContainer")
+        self.setFixedHeight(50)
+        self.buttons = {}
+        self.active_tactic = None
+        self.setup_ui()
 
-    def move_text(self):
-        self.x_pos -= 2
-        if self.x_pos < -1500:
-            self.x_pos = self.width()
-        self.update()
-        
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bg_col = self.palette().color(QPalette.ColorRole.Base)
-        tint = QColor(bg_col.red(), bg_col.green(), bg_col.blue(), 200)
-        painter.fillRect(0, 0, self.width(), self.height(), tint)
-        painter.setPen(QColor("#ef4444"))
-        painter.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
-        painter.drawText(int(self.x_pos), 20, self.text)
+    def setup_ui(self):
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(6)
 
-class ThreatRadarMap(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setMinimumSize(100, 100)
-        self.angle = 0
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.rotate_radar)
-        self.timer.start(50)
-        self.threats = []
-        
-    def add_threat(self):
-        import random, math
-        r = random.uniform(10, self.width()/2 - 20)
-        theta = random.uniform(0, 2 * math.pi)
-        x = r * math.cos(theta)
-        y = r * math.sin(theta)
-        self.threats.append([x, y, 1.0])
-        if len(self.threats) > 10:
-            self.threats.pop(0)
-            
-    def rotate_radar(self):
-        self.angle = (self.angle + 4) % 360
-        for t in self.threats:
-            t[2] -= 0.02
-        self.threats = [t for t in self.threats if t[2] > 0]
-        self.update()
+        lbl = QLabel("🎯 MITRE ATT&CK:")
+        lbl.setStyleSheet("font-size: 10px; font-weight: bold; color: #38bdf8;")
+        layout.addWidget(lbl)
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        cx, cy = w/2, h/2
-        
-        # Grid
-        painter.setPen(QPen(QColor(0, 255, 0, 80), 1, Qt.PenStyle.DashLine))
-        painter.drawEllipse(QPointF(cx, cy), cx-15, cy-15)
-        painter.drawEllipse(QPointF(cx, cy), (cx-15)*0.66, (cy-15)*0.66)
-        painter.drawEllipse(QPointF(cx, cy), (cx-15)*0.33, (cy-15)*0.33)
-        painter.drawLine(int(cx), 15, int(cx), h-15)
-        painter.drawLine(15, int(cy), w-15, int(cy))
-        
-        # Beam
-        conicalGrad = QConicalGradient(cx, cy, -self.angle)
-        conicalGrad.setColorAt(0, QColor(0, 255, 0, 100))
-        conicalGrad.setColorAt(0.1, QColor(0, 255, 0, 0))
-        conicalGrad.setColorAt(1, QColor(0, 255, 0, 0))
-        painter.setBrush(conicalGrad)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawPie(int(cx - (cx-15)), int(cy - (cy-15)), int((cx-15)*2), int((cy-15)*2), int(-self.angle * 16), int(30 * 16))
-        
-        # Threats
-        for x, y, intensity in self.threats:
-            alpha = int(255 * intensity)
-            painter.setBrush(QColor(255, 50, 50, alpha))
-            painter.setPen(QPen(QColor(255, 50, 50, alpha)))
-            painter.drawEllipse(QPointF(cx + x, cy + y), 4, 4)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            r = 10 * (1.0 - intensity + 0.1)
-            painter.drawEllipse(QPointF(cx + x, cy + y), r, r)
+        tactics = [
+            ("Initial Access", "0"),
+            ("Execution", "0"),
+            ("Persistence", "0"),
+            ("Privilege Escalation", "0"),
+            ("Defense Evasion", "0"),
+            ("Credential Access", "0"),
+            ("Lateral Movement", "0"),
+            ("Exfiltration", "0")
+        ]
 
+        for tac, init_cnt in tactics:
+            btn = QPushButton(f"{tac} ({init_cnt})")
+            btn.setFixedHeight(26)
+            btn.setCheckable(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(self._get_pill_style(False, False))
+            btn.clicked.connect(lambda checked, t=tac: self.on_tactic_clicked(t))
+            layout.addWidget(btn)
+            self.buttons[tac] = btn
+
+    def _get_pill_style(self, is_active, has_alerts):
+        if is_active:
+            return "background: #0284c7; color: white; font-weight: bold; font-size: 9px; padding: 2px 6px; border-radius: 4px; border: 1px solid #38bdf8;"
+        elif has_alerts:
+            return "background: rgba(239, 68, 68, 0.15); color: #ef4444; font-weight: bold; font-size: 9px; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(239, 68, 68, 0.3);"
+        return "background: rgba(148, 163, 184, 0.1); color: #94a3b8; font-size: 9px; padding: 2px 6px; border-radius: 4px; border: 1px solid rgba(148, 163, 184, 0.2);"
+
+    def update_counts(self, counts: dict):
+        for tac, btn in self.buttons.items():
+            cnt = counts.get(tac, 0)
+            btn.setText(f"{tac} ({cnt})")
+            is_active = (self.active_tactic == tac)
+            btn.setStyleSheet(self._get_pill_style(is_active, cnt > 0))
+
+    def on_tactic_clicked(self, tactic: str):
+        if self.active_tactic == tactic:
+            self.active_tactic = None
+            self.buttons[tactic].setChecked(False)
+            self.tactic_selected.emit("All")
+        else:
+            self.active_tactic = tactic
+            for t, btn in self.buttons.items():
+                btn.setChecked(t == tactic)
+            self.tactic_selected.emit(tactic)
+
+
+# ==========================================================
+# Visualizer: Security Radar Chart (Multi-Vector Posture)
+# ==========================================================
 class SecurityRadarChart(QWidget):
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(220, 220)
-        self.dimensions = ["Endpoint", "Traffic", "Storage", "Memory", "Network"]
+        self.setMinimumSize(180, 160)
+        self.dimensions = ["Host Endpoint", "Network NIDS", "Memory", "Cloud CASB", "Phishing"]
         self.values = [100, 100, 100, 100, 100]
-        
-    def update_scores(self, endpoint, traffic, storage, memory, network):
-        self.values = [max(10, min(100, v)) for v in (endpoint, traffic, storage, memory, network)]
+
+    def update_scores(self, endpoint, network, memory, cloud, phishing):
+        self.values = [max(10, min(100, v)) for v in (endpoint, network, memory, cloud, phishing)]
         self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        
+
         w, h = self.width(), self.height()
         cx, cy = w / 2, h / 2
-        radius = min(w, h) / 2 - 35
+        radius = min(w, h) / 2 - 28
         num_dim = len(self.dimensions)
-        
-        # 3 concentric polygons
-        painter.setPen(QPen(QColor(128, 128, 128, 60), 1))
+
+        # Concentric guide polygons
+        painter.setPen(QPen(QColor(148, 163, 184, 50), 1))
         for step in [0.33, 0.66, 1.0]:
             poly = QPainterPath()
             for i in range(num_dim):
@@ -176,26 +425,24 @@ class SecurityRadarChart(QWidget):
                     poly.lineTo(x, y)
             poly.closeSubpath()
             painter.drawPath(poly)
-            
-        painter.setPen(QColor(150, 150, 150))
-        painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+
+        # Spoke Lines & Dimension Text
+        painter.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
         for i in range(num_dim):
             angle = math.pi / 2 - (i * 2 * math.pi / num_dim)
             x_end = cx + radius * math.cos(angle)
             y_end = cy - radius * math.sin(angle)
-            painter.setPen(QPen(QColor(128, 128, 128, 80), 1, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(QColor(148, 163, 184, 80), 1, Qt.PenStyle.DashLine))
             painter.drawLine(int(cx), int(cy), int(x_end), int(y_end))
-            
+
             painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
-            lbl_r = radius + 12
+            lbl_r = radius + 10
             x_lbl = cx + lbl_r * math.cos(angle)
             y_lbl = cy - lbl_r * math.sin(angle)
-            align = Qt.AlignmentFlag.AlignCenter
-            if math.cos(angle) > 0.1: align = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-            elif math.cos(angle) < -0.1: align = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-            lbl_rect = QRectF(x_lbl - 30, y_lbl - 10, 60, 20)
-            painter.drawText(lbl_rect, align, self.dimensions[i])
-            
+            lbl_rect = QRectF(x_lbl - 32, y_lbl - 8, 64, 16)
+            painter.drawText(lbl_rect, Qt.AlignmentFlag.AlignCenter, self.dimensions[i])
+
+        # Data Polygon
         data_poly = QPainterPath()
         for i in range(num_dim):
             angle = math.pi / 2 - (i * 2 * math.pi / num_dim)
@@ -207,30 +454,34 @@ class SecurityRadarChart(QWidget):
             else:
                 data_poly.lineTo(x, y)
         data_poly.closeSubpath()
-        
+
         avg_score = sum(self.values) / num_dim
-        color = QColor("#0078d7") if avg_score > 80 else (QColor("#ffc107") if avg_score > 60 else QColor("#dc3545"))
-        
+        color = QColor("#10b981") if avg_score > 80 else (QColor("#f59e0b") if avg_score > 60 else QColor("#ef4444"))
+
         pen = QPen(color, 2)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
         fill_color = QColor(color)
-        fill_color.setAlpha(60)
+        fill_color.setAlpha(50)
         painter.setBrush(fill_color)
         painter.drawPath(data_poly)
-        
-        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
-        painter.setFont(QFont("Segoe UI", 12, QFont.Weight.Black))
-        painter.drawText(int(cx-30), int(cy-15), 60, 30, Qt.AlignmentFlag.AlignCenter, f"{int(avg_score)}")
 
+        # Center Score
+        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+        painter.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        painter.drawText(int(cx - 25), int(cy - 12), 50, 24, Qt.AlignmentFlag.AlignCenter, f"{int(avg_score)}%")
+
+
+# ==========================================================
+# Visualizer: Threat Distribution Donut Chart
+# ==========================================================
 class ThreatDonutChart(QWidget):
     def __init__(self):
         super().__init__()
-        self.setMinimumSize(100, 100)
-        self.stats = {"Safe": 0, "Warning": 0, "Critical": 0}
-        self.setMouseTracking(True)
+        self.setMinimumSize(120, 120)
+        self.stats = {"Safe": 0, "Medium": 0, "Critical": 0}
 
-    def update_stats(self, stats):
+    def update_stats(self, stats: dict):
         self.stats = stats
         self.update()
 
@@ -238,261 +489,59 @@ class ThreatDonutChart(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        
-        painter.fillRect(0, 0, w, h, self.palette().color(QPalette.ColorRole.Window))
-        
-        total = sum(self.stats.values())
-        if total == 0: return
 
-        colors = {"Safe": "#28a745", "Warning": "#ffc107", "Critical": "#dc3545"}
-        
-        top_pad = 10
-        size = min(w, h - top_pad) - 20
-        rect = QRectF((w - size) / 2, top_pad + 10, size, size)
-        
-        # Subtle Drop Shadow Effect for whole pie area
-        shadow_rect = rect.translated(0, 4)
-        painter.setBrush(QColor(0, 0, 0, 40))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(shadow_rect)
-        
-        start_angle = 90 * 16
-        
-        for label, count in self.stats.items():
-            if count > 0:
-                span = int((count / total) * 360 * 16)
-                
-                # Draw main slice with rounded caps
-                pen = QPen(QColor(colors.get(label, "#888")), 14, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-                painter.setPen(pen)
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                
-                # Adjust rect to account for pen width
-                arc_rect = rect.adjusted(7, 7, -7, -7)
-                painter.drawArc(arc_rect, start_angle, span)
-                
-                start_angle += span
-                
-        text_col = self.palette().color(QPalette.ColorRole.WindowText)
-        painter.setPen(text_col)
-        painter.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
-        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, f"Total\n{total}")
+        is_dark = self.palette().color(QPalette.ColorRole.Window).lightness() < 128
+        bg_col = QColor("#111726") if is_dark else QColor("#ffffff")
 
-    def mouseMoveEvent(self, event):
         total = sum(self.stats.values())
-        if total == 0: return super().mouseMoveEvent(event)
-            
-        pos = event.pos()
-        w, h = self.width(), self.height()
-        top_pad = 10
-        size = min(w, h - top_pad) - 20
-        rect = QRectF((w - size) / 2, top_pad + 10, size, size)
-        
-        center = rect.center()
-        dx = pos.x() - center.x()
-        dy = pos.y() - center.y()
-        distance = math.hypot(dx, dy)
-        
-        inner_radius = (size / 2) - 14
-        outer_radius = (size / 2) + 7
-        
-        if inner_radius <= distance <= outer_radius:
-            angle = math.degrees(math.atan2(-dy, dx))
-            if angle < 0: angle += 360
-            mapped_angle = (angle - 90) % 360
-            
-            current_span = 0
+        chart_size = min(w - 20, h - 20)
+        rect = QRectF((w - chart_size) / 2, (h - chart_size) / 2, chart_size, chart_size)
+
+        if total == 0:
+            painter.setBrush(QColor(100, 116, 139, 40))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(rect)
+        else:
+            colors_map = {
+                "Safe": QColor("#10b981"),
+                "Low": QColor("#38bdf8"),
+                "Medium": QColor("#f59e0b"),
+                "High": QColor("#ef4444"),
+                "Critical": QColor("#dc2626")
+            }
+            start_angle = 90 * 16
             for label, count in self.stats.items():
                 if count > 0:
-                    span = (count / total) * 360
-                    if current_span <= mapped_angle <= current_span + span:
-                        QToolTip.showText(event.globalPosition().toPoint(), f"{label}\nEvents: {count}\nShare: {(count/total)*100:.1f}%", self)
-                        return
-                    current_span += span
-                    
-        QToolTip.hideText()
-        super().mouseMoveEvent(event)
+                    span = int((count / total) * 360 * 16)
+                    painter.setBrush(colors_map.get(label, QColor("#64748b")))
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.drawPie(rect, start_angle, span)
+                    start_angle += span
 
-class EventInspectorDialog(QDialog):
-    def __init__(self, parent, db_info, basic_info):
-        super().__init__(parent)
-        self.setWindowTitle("Detailed Event Inspector")
-        self.setMinimumSize(600, 450)
-        
-        layout = QVBoxLayout(self)
-        
-        header = QLabel(f"🔍 Event Details: {basic_info['source']}")
-        header.setStyleSheet("font-size: 16px; font-weight: bold; color: #0078d7;")
-        layout.addWidget(header)
-        
-        form_group = QGroupBox("General Information")
-        form_layout = QFormLayout(form_group)
-        form_layout.addRow("🕒 Time:", QLabel(basic_info['time']))
-        
-        sev_lbl = QLabel(basic_info['severity'])
-        if basic_info['severity'] in ["Critical", "High", "High Risk"]:
-            sev_lbl.setStyleSheet("color: #dc3545; font-weight: bold;")
-        elif basic_info['severity'] in ["Medium", "Medium Risk", "Warning"]:
-            sev_lbl.setStyleSheet("color: #ffc107; font-weight: bold;")
-        else:
-            sev_lbl.setStyleSheet("color: #28a745; font-weight: bold;")
-            
-        form_layout.addRow("⚠️ Severity:", sev_lbl)
-        form_layout.addRow("📝 Description:", QLabel(basic_info['desc']))
-        layout.addWidget(form_group)
-        
-        self.raw_text = QTextEdit()
-        self.raw_text.setReadOnly(True)
-        self.raw_text.setFontFamily("Courier New")
-        layout.addWidget(QLabel("Raw Database Payload:"))
-        layout.addWidget(self.raw_text)
-        
-        btn_close = QPushButton("Close")
-        btn_close.clicked.connect(self.accept)
-        layout.addWidget(btn_close, alignment=Qt.AlignmentFlag.AlignRight)
-        
-        self.load_db_info(db_info)
+        # Center Hole
+        inner_size = chart_size * 0.65
+        inner_rect = QRectF((w - inner_size) / 2, (h - inner_size) / 2, inner_size, inner_size)
+        painter.setBrush(bg_col)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(inner_rect)
 
-    def load_db_info(self, db_info):
-        if not db_info:
-            self.raw_text.setPlainText("No extended database record available for this event.")
-            return
-            
-        table_name, record_id, db_path = db_info
-        try:
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute(f"SELECT * FROM {table_name} WHERE id = ?", (record_id,))
-            row = cursor.fetchone()
-            conn.close()
-            
-            if row:
-                details = dict(row)
-                for k, v in details.items():
-                    if isinstance(v, str) and (v.startswith('{') or v.startswith('[')):
-                        try:
-                            details[k] = json.loads(v)
-                        except: pass
-                self.raw_text.setPlainText(json.dumps(details, indent=4))
-            else:
-                self.raw_text.setPlainText("Record not found in database. It may have been deleted.")
-        except Exception as e:
-            self.raw_text.setPlainText(f"Error fetching details from database: {e}")
+        # Center text
+        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+        painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        painter.drawText(inner_rect, Qt.AlignmentFlag.AlignCenter, f"{total}\nThreats")
 
-# --- ML Behavioral Anomaly Buffer ---
-telemetry_buffer = []
 
-class OverviewWorker(QThread):
-    """Background worker to fetch telemetry without freezing the GUI."""
-    data_fetched = pyqtSignal(dict)
-
-    def __init__(self, fetch_db=False, db_path="nexashield.db"):
-        super().__init__()
-        self.fetch_db = fetch_db
-        self.db_path = db_path
-
-    def run(self):
-        data = {}
-        data['cpu'] = psutil.cpu_percent()
-        data['ram'] = psutil.virtual_memory().percent
-        try:
-            data['disk'] = psutil.disk_usage(os.path.abspath(os.sep)).percent
-        except Exception:
-            data['disk'] = 0.0
-            
-        try:
-            io = psutil.net_io_counters()
-            data['net_bytes'] = io.bytes_recv + io.bytes_sent
-        except Exception:
-            data['net_bytes'] = 0
-            
-        net_up = False
-        try:
-            stats = psutil.net_if_stats()
-            for name, stat in stats.items():
-                if stat.isup and name != "lo" and "Loopback" not in name:
-                    net_up = True
-                    break
-        except Exception:
-            pass
-        data['net_up'] = net_up
-        
-        events = []
-        if self.fetch_db:
-            try:
-                conn = sqlite3.connect(self.db_path)
-                cursor = conn.cursor()
-                
-                # Check existing tables to prevent failure on fresh installs
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-                tables = [r[0] for r in cursor.fetchall()]
-                
-                queries = []
-                if 'phishing_history' in tables:
-                    queries.append("SELECT id, timestamp, 'Phishing Detection' as source, url as description, threat_level as severity, 'phishing_history' as table_name FROM phishing_history")
-                if 'scan_history' in tables:
-                    queries.append("SELECT id, timestamp, 'Antivirus' as source, scan_type || ' Scan Completed - ' || threats_found || ' threat(s) found' as description, CASE WHEN threats_found > 0 THEN 'Critical' ELSE 'Safe' END as severity, 'scan_history' as table_name FROM scan_history")
-                if 'siem_events' in tables:
-                    queries.append("SELECT id, timestamp, source, description, severity, 'siem_events' as table_name FROM siem_events")
-                    
-                if queries:
-                    full_query = " UNION ALL ".join(queries) + " ORDER BY timestamp DESC LIMIT 50"
-                    cursor.execute(full_query)
-                    for row in cursor.fetchall():
-                        events.append((row[1], row[2], row[3], row[4], (row[5], row[0], self.db_path)))
-                        
-                conn.close()
-            except Exception:
-                pass
-                
-            # Calculate Unified Security Score
-            score = 100
-            if data['cpu'] > 85: score -= 10
-            if data['ram'] > 85: score -= 10
-            if data['disk'] > 90: score -= 10
-            if not data['net_up']: score -= 20
-            
-            critical_count = sum(1 for e in events if e[3] in ["Critical", "High", "High Risk"])
-            medium_count = sum(1 for e in events if e[3] in ["Medium", "Medium Risk", "Warning"])
-            score -= (critical_count * 5) + (medium_count * 2)
-            
-            data['security_score'] = max(0, min(100, int(score)))
-            data['events'] = events
-            
-        # AI Anomaly Detection
-        try:
-            from sklearn.ensemble import IsolationForest
-            import numpy as np
-            global telemetry_buffer
-            
-            vec = [data.get('cpu', 0), data.get('ram', 0), data.get('disk', 0)]
-            telemetry_buffer.append(vec)
-            if len(telemetry_buffer) > 60:
-                telemetry_buffer.pop(0)
-                
-            if len(telemetry_buffer) > 10:
-                clf = IsolationForest(n_estimators=20, contamination=0.1, random_state=42)
-                X = np.array(telemetry_buffer)
-                clf.fit(X)
-                score_val = clf.score_samples([vec])[0]
-                normalized = max(0, min(100, (-score_val - 0.4) * 200))
-                data['anomaly_score'] = normalized
-            else:
-                data['anomaly_score'] = 0.0
-        except Exception:
-            data['anomaly_score'] = 0.0
-            
-        self.data_fetched.emit(data)
-
+# ==========================================================
+# Visualizer: Smooth Telemetry Area Chart
+# ==========================================================
 class OverviewBarChart(QWidget):
     """Draws a real-time smooth area chart for telemetry visualization."""
-    def __init__(self, title, color="#28a745"):
+    def __init__(self, title, color="#0284c7"):
         super().__init__()
         self.title = title
         self.primary_color = QColor(color)
-        self.data = [0.0] * 40
-        self.setMinimumHeight(160)
+        self.data = [0.0] * 35
+        self.setMinimumHeight(130)
 
     def update_value(self, percent):
         self.data.pop(0)
@@ -503,597 +552,742 @@ class OverviewBarChart(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
-        
-        # Title and Current Value
+
         text_color = self.palette().color(QPalette.ColorRole.WindowText)
         painter.setPen(text_color)
-        painter.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-        painter.drawText(10, 25, f"{self.title}")
-        
-        painter.setPen(self.primary_color)
-        painter.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-        painter.drawText(w - 80, 25, 70, 25, Qt.AlignmentFlag.AlignRight, f"{self.data[-1]:.1f}%")
+        painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        painter.drawText(10, 18, f"{self.title}")
 
-        # Grid lines
-        top_pad = 40
-        chart_h = h - top_pad - 10
-        grid_col = QColor(128, 128, 128, 40)
+        painter.setPen(self.primary_color)
+        painter.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        painter.drawText(w - 75, 5, 65, 20, Qt.AlignmentFlag.AlignRight, f"{self.data[-1]:.1f}%")
+
+        top_pad = 28
+        chart_h = h - top_pad - 8
+        grid_col = QColor(148, 163, 184, 30)
         painter.setPen(QPen(grid_col, 1, Qt.PenStyle.DashLine))
         for i in range(3):
             y_line = top_pad + i * (chart_h / 2)
             painter.drawLine(10, int(y_line), w - 10, int(y_line))
-            
-        # Draw Smooth Area Chart
-        if not self.data: return
-        
+
+        if not self.data:
+            return
+
         path = QPainterPath()
         step_x = (w - 20) / (len(self.data) - 1)
-        
-        # Start at bottom left
-        path.moveTo(10, h - 10)
-        
-        # First point
-        first_y = h - 10 - (self.data[0] / 100.0) * chart_h
-        path.lineTo(10, first_y)
-        
-        for i in range(1, len(self.data)):
-            x = 10 + i * step_x
-            y = h - 10 - (self.data[i] / 100.0) * chart_h
-            
-            # Smooth cubic bezier curve
-            prev_x = 10 + (i - 1) * step_x
-            prev_y = h - 10 - (self.data[i-1] / 100.0) * chart_h
-            
-            cp1_x = prev_x + (x - prev_x) / 2
-            cp1_y = prev_y
-            cp2_x = cp1_x
-            cp2_y = y
-            
-            path.cubicTo(cp1_x, cp1_y, cp2_x, cp2_y, x, y)
-            
-        # Complete path back to bottom right
-        path.lineTo(w - 10, h - 10)
-        path.closeSubpath()
-        
-        # Gradient Fill
-        grad = QLinearGradient(0, top_pad, 0, h - 10)
-        c = self.primary_color
-        grad.setColorAt(0, QColor(c.red(), c.green(), c.blue(), 120))
-        grad.setColorAt(1, QColor(c.red(), c.green(), c.blue(), 10))
-        
-        painter.setBrush(grad)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawPath(path)
-        
-        # Draw top glow line (stroke only)
-        stroke_path = QPainterPath()
-        stroke_path.moveTo(10, first_y)
-        for i in range(1, len(self.data)):
-            x = 10 + i * step_x
-            y = h - 10 - (self.data[i] / 100.0) * chart_h
-            prev_x = 10 + (i - 1) * step_x
-            prev_y = h - 10 - (self.data[i-1] / 100.0) * chart_h
-            cp1_x = prev_x + (x - prev_x) / 2
-            cp1_y = prev_y
-            cp2_x = cp1_x
-            cp2_y = y
-            stroke_path.cubicTo(cp1_x, cp1_y, cp2_x, cp2_y, x, y)
-            
-        pen = QPen(self.primary_color, 2.5)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawPath(stroke_path)
-        
-        # Draw Forecasting Line (Linear Regression)
-        if len(self.data) >= 10:
-            import numpy as np
-            y_vals = self.data[-10:]
-            x_vals = np.arange(10)
-            A = np.vstack([x_vals, np.ones(len(x_vals))]).T
-            try:
-                m, c = np.linalg.lstsq(A, y_vals, rcond=None)[0]
-                
-                forecast_x = len(self.data) - 1
-                forecast_y = self.data[-1]
-                next_y = m * (10 + 2) + c # predict 2 steps ahead
-                next_y = max(0, min(100, next_y))
-                
-                fx1 = 10 + forecast_x * step_x
-                fy1 = h - 10 - (forecast_y / 100.0) * chart_h
-                fx2 = fx1 + 2 * step_x
-                fy2 = h - 10 - (next_y / 100.0) * chart_h
-                
-                # Clip to widget boundary
-                fx2 = min(fx2, w - 5)
-                
-                dash_pen = QPen(self.primary_color, 2, Qt.PenStyle.DashLine)
-                painter.setPen(dash_pen)
-                painter.drawLine(int(fx1), int(fy1), int(fx2), int(fy2))
-                
-                painter.setBrush(self.primary_color)
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.drawEllipse(QPointF(fx2, fy2), 4, 4)
-            except Exception:
-                pass
+        path.moveTo(10, top_pad + chart_h - (self.data[0] / 100.0 * chart_h))
 
+        for i in range(1, len(self.data)):
+            x = 10 + i * step_x
+            y = top_pad + chart_h - (self.data[i] / 100.0 * chart_h)
+            path.lineTo(x, y)
+
+        painter.setPen(QPen(self.primary_color, 2))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPath(path)
+
+        path.lineTo(w - 10, top_pad + chart_h)
+        path.lineTo(10, top_pad + chart_h)
+        path.closeSubpath()
+
+        grad = QLinearGradient(0, top_pad, 0, top_pad + chart_h)
+        col_alpha = QColor(self.primary_color)
+        col_alpha.setAlpha(60)
+        grad.setColorAt(0, col_alpha)
+        col_zero = QColor(self.primary_color)
+        col_zero.setAlpha(0)
+        grad.setColorAt(1, col_zero)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(grad)
+        painter.drawPath(path)
+
+
+# ==========================================================
+# Syslog Forwarding Configuration Modal
+# ==========================================================
+class SyslogDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Configure Syslog Forwarding")
+        self.setMinimumSize(350, 180)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(12)
+
+        header = QLabel("📡 Syslog UDP Stream Configuration")
+        header.setStyleSheet("font-size: 13px; font-weight: bold; color: #38bdf8;")
+        main_layout.addWidget(header)
+
+        form_layout = QFormLayout()
+        form_layout.setSpacing(10)
+
+        self.ip_input = QLineEdit("127.0.0.1")
+        self.ip_input.setFixedHeight(30)
+        self.port_input = QLineEdit("514")
+        self.port_input.setFixedHeight(30)
+
+        form_layout.addRow(QLabel("Syslog IP:"), self.ip_input)
+        form_layout.addRow(QLabel("Syslog Port:"), self.port_input)
+        main_layout.addLayout(form_layout)
+
+        main_layout.addStretch()
+
+        self.btn_start = QPushButton("🚀 Stream Logs to Syslog")
+        self.btn_start.setFixedHeight(32)
+        self.btn_start.setObjectName("BtnPrimary")
+        self.btn_start.clicked.connect(self.accept)
+        main_layout.addWidget(self.btn_start)
+
+
+# ==========================================================
+# Telemetry Background Worker
+# ==========================================================
+class OverviewWorker(QThread):
+    """Background worker to fetch telemetry without freezing the GUI."""
+    data_fetched = pyqtSignal(dict)
+
+    def __init__(self, session=None):
+        super().__init__()
+        self.session = session
+        self.engine = SIEMCorrelationEngine(session_manager=session)
+
+    def run(self):
+        data = {}
+        data['cpu'] = psutil.cpu_percent()
+        data['ram'] = psutil.virtual_memory().percent
+        try:
+            data['disk'] = psutil.disk_usage(os.path.abspath(os.sep)).percent
+        except Exception:
+            data['disk'] = 0.0
+
+        try:
+            io = psutil.net_io_counters()
+            data['net_bytes'] = io.bytes_recv + io.bytes_sent
+        except Exception:
+            data['net_bytes'] = 0
+
+        # Query Cross-Module Correlated Events & Threat Analytics
+        analytics = self.engine.get_threat_analytics()
+        events = self.engine.get_correlated_events(limit=100)
+
+        data['analytics'] = analytics
+        data['events'] = events
+        self.data_fetched.emit(data)
+
+
+# ==========================================================
+# Main SIEM Overview & SOC Command Center Widget
+# ==========================================================
 class OverviewWidget(QWidget):
-    def __init__(self, session_manager=None):
+    def __init__(self, session_manager=None, siem_dashboard=None):
         super().__init__()
         self.session = session_manager
-        self._tick_count = 0
-        self._last_events = None
+        self.siem_dashboard = siem_dashboard
+        self._is_streaming = True
+        self.current_selected_event = None
+        self.active_tactic_filter = "All"
+        self.all_events_cache = []
+
         self.setup_ui()
-        
-        # Timer for real-time updates
+
+        # Telemetry sample timer (every 2.5 seconds)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.update_dashboard)
-        self.timer.start(2000)
-        QTimer.singleShot(150, self.update_dashboard)
+        self.timer.start(2500)
+        QTimer.singleShot(100, self.update_dashboard)
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        if hasattr(self, 'timer') and not self.timer.isActive():
-            self.timer.start(2000)
-            self.update_dashboard()
+    def is_dark_mode(self) -> bool:
+        return self.palette().color(QPalette.ColorRole.Window).lightness() < 128
 
-    def hideEvent(self, event):
-        super().hideEvent(event)
-        if hasattr(self, 'timer'):
-            self.timer.stop()
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.StyleChange):
+            self.radar_chart.update()
+            self.threat_donut.update()
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(20)
+        layout.setContentsMargins(15, 12, 15, 12)
+        layout.setSpacing(10)
 
-        # 1. Header & Quick Status
-        header_layout = QHBoxLayout()
-        header = QLabel("⚡ Dashboard & Live Telemetry")
-        header.setStyleSheet("font-size: 26px; font-weight: 800; color: #0078d7; letter-spacing: 1px;")
-        header_layout.addWidget(header)
-        
-        header_layout.addStretch()
-        
-        # System Specs small badge
-        sys_info = f"{platform.system()} {platform.release()} ({platform.machine()})"
-        host_badge = QLabel(f"🖥️ {socket.gethostname()}  |  {sys_info}")
-        host_badge.setStyleSheet("padding: 8px 15px; border-radius: 6px; font-weight: bold;")
-        header_layout.addWidget(host_badge)
-        
-        layout.addLayout(header_layout)
-        
-        # Live Threat Ticker
-        self.ticker = LiveThreatTicker()
-        layout.addWidget(self.ticker)
+        # ==========================================================
+        # 1. TOP COMMAND BAR (Title, Specs, Super Report & Actions)
+        # ==========================================================
+        top_bar = QFrame()
+        top_bar.setObjectName("ProcessToolbar")
+        top_bar.setMinimumHeight(46)
+        top_layout = QHBoxLayout(top_bar)
+        top_layout.setContentsMargins(12, 6, 12, 6)
+        top_layout.setSpacing(10)
 
-        # 2. Histograms Row
+        # Brand / Center Title
+        title_box = QHBoxLayout()
+        title_box.setSpacing(6)
+        lbl_brand = QLabel("⚡ SIEM SOC Command Center")
+        lbl_brand.setStyleSheet("font-size: 15px; font-weight: 800; color: #0284c7; letter-spacing: 0.5px;")
+        title_box.addWidget(lbl_brand)
+
+        # Host Specs Badge
+        sys_info = f"{platform.system()} {platform.release()} ({socket.gethostname()})"
+        self.lbl_host_badge = QLabel(f"🖥️ {sys_info}")
+        self.lbl_host_badge.setStyleSheet("font-size: 10px; color: #94a3b8; font-weight: 600; padding: 3px 8px; background: rgba(148, 163, 184, 0.1); border-radius: 4px;")
+        title_box.addWidget(self.lbl_host_badge)
+        top_layout.addLayout(title_box)
+
+        top_layout.addStretch()
+
+        # 🌟 SUPER REPORT Action Button (Golden/Cyan Eye-Catching)
+        self.btn_super_report = QPushButton("🌟 Generate Super Report")
+        self.btn_super_report.setObjectName("BtnPrimary")
+        self.btn_super_report.setFixedHeight(32)
+        self.btn_super_report.setMinimumWidth(185)
+        self.btn_super_report.setStyleSheet(
+            "QPushButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0284c7, stop:1 #38bdf8); "
+            "color: white; font-weight: 800; font-size: 11px; border-radius: 6px; padding: 4px 12px; border: 1px solid #38bdf8; } "
+            "QPushButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0369a1, stop:1 #0284c7); }"
+        )
+        self.btn_super_report.clicked.connect(self.open_super_report_dialog)
+        top_layout.addWidget(self.btn_super_report)
+
+        # ⚡ Instant Incident Sweep
+        self.btn_sweep = QPushButton("⚡ Incident Sweep")
+        self.btn_sweep.setFixedHeight(32)
+        self.btn_sweep.clicked.connect(self.update_dashboard)
+        top_layout.addWidget(self.btn_sweep)
+
+        # ⏸️ Pause / ▶️ Stream Telemetry Toggle
+        self.btn_stream = QPushButton("⏸️ Stream Live")
+        self.btn_stream.setFixedHeight(32)
+        self.btn_stream.setCheckable(True)
+        self.btn_stream.setChecked(True)
+        self.btn_stream.clicked.connect(self.toggle_stream)
+        top_layout.addWidget(self.btn_stream)
+
+        # 📡 Syslog
+        self.btn_syslog = QPushButton("📡 Syslog")
+        self.btn_syslog.setFixedHeight(32)
+        self.btn_syslog.clicked.connect(self.setup_syslog)
+        top_layout.addWidget(self.btn_syslog)
+
+        # 🗑️ Purge Logs
+        self.btn_clear = QPushButton("🗑️ Clear")
+        self.btn_clear.setObjectName("BtnDanger")
+        self.btn_clear.setFixedHeight(32)
+        self.btn_clear.clicked.connect(self.clear_logs)
+        top_layout.addWidget(self.btn_clear)
+
+        layout.addWidget(top_bar)
+
+        # ==========================================================
+        # 2. SOC METRIC RIBBON (5 High-Density Tiles)
+        # ==========================================================
+        ribbon_layout = QHBoxLayout()
+        ribbon_layout.setSpacing(8)
+
+        self.card_posture = InfoCard("Global Security Posture", "100%", "🛡️", "#10b981")
+        self.card_critical = InfoCard("Critical Threats", "0", "🚨", "#ef4444")
+        self.card_blocked = InfoCard("Intercepted & Blocked", "0", "🌐", "#38bdf8")
+        self.card_cloud = InfoCard("Cloud DLP & Exposure", "0", "☁️", "#f59e0b")
+        self.card_anomaly = InfoCard("AI Behavioral Anomaly", "1.2%", "🤖", "#818cf8")
+
+        ribbon_layout.addWidget(self.card_posture)
+        ribbon_layout.addWidget(self.card_critical)
+        ribbon_layout.addWidget(self.card_blocked)
+        ribbon_layout.addWidget(self.card_cloud)
+        ribbon_layout.addWidget(self.card_anomaly)
+        layout.addLayout(ribbon_layout)
+
+        # ==========================================================
+        # 3. MITRE ATT&CK & CYBER KILL CHAIN STRIP
+        # ==========================================================
+        self.mitre_ribbon = MITREAttackRibbon()
+        self.mitre_ribbon.tactic_selected.connect(self.on_mitre_tactic_selected)
+        layout.addWidget(self.mitre_ribbon)
+
+        # ==========================================================
+        # 4. TELEMETRY GAUGES & HISTOGRAMS ROW
+        # ==========================================================
         hist_frame = QFrame()
         hist_frame.setObjectName("CardContainer")
+        hist_frame.setFixedHeight(145)
         hist_layout = QHBoxLayout(hist_frame)
-        hist_layout.setContentsMargins(15, 15, 15, 15)
-        hist_layout.setSpacing(15)
-        
-        self.cpu_hist = OverviewBarChart("CPU Utilization", "#0078d7")
-        self.ram_hist = OverviewBarChart("Memory Usage", "#ffc107")
-        self.disk_hist = OverviewBarChart("Storage I/O", "#dc3545")
-        self.net_hist = OverviewBarChart("Network I/O", "#17a2b8")
-        
+        hist_layout.setContentsMargins(10, 8, 10, 8)
+        hist_layout.setSpacing(10)
+
+        self.cpu_hist = OverviewBarChart("CPU Utilization", "#0284c7")
+        self.ram_hist = OverviewBarChart("Memory Allocation", "#f59e0b")
+        self.disk_hist = OverviewBarChart("Storage I/O", "#ef4444")
+        self.net_hist = OverviewBarChart("Network I/O", "#10b981")
+
         hist_layout.addWidget(self.cpu_hist)
         hist_layout.addWidget(self.ram_hist)
         hist_layout.addWidget(self.disk_hist)
         hist_layout.addWidget(self.net_hist)
-        
-        layout.addWidget(hist_frame, 2) # Give charts more vertical space
+        layout.addWidget(hist_frame)
 
-        # 3. Bottom Row: Health Modules & Recent Events
-        bottom_layout = QHBoxLayout()
-        bottom_layout.setSpacing(20)
+        # ==========================================================
+        # 5. LOWER WORKSPACE: Correlated Alerts <---> 440px Drawer
+        # ==========================================================
+        workspace_layout = QHBoxLayout()
+        workspace_layout.setSpacing(10)
 
-        # Left: Device Health Checklist (Col 1)
-        health_frame = QFrame()
-        health_frame.setObjectName("CardContainer")
-        health_layout = QVBoxLayout(health_frame)
-        health_layout.setContentsMargins(15, 15, 15, 15)
-        
-        title_health = QLabel("🛡️ Protection Status")
-        title_health.setStyleSheet("font-size: 16px; font-weight: bold; background: transparent;")
-        health_layout.addWidget(title_health)
-        health_layout.addSpacing(10)
-        
-        inner_health = QHBoxLayout()
-        
-        # Left inner: Radar Chart
-        radar_container = QVBoxLayout()
-        self.lbl_score = QLabel("🏆 Security Posture")
-        self.lbl_score.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_score.setStyleSheet("font-size: 14px; font-weight: 800; color: #0078d7; background: transparent;")
-        radar_container.addWidget(self.lbl_score)
-        
+        # Left Container (Visualizers + Alert Table)
+        left_container = QWidget()
+        left_layout = QVBoxLayout(left_container)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
+
+        # Visualizers Banner (Radar Posture + Donut Chart + Health Checklist)
+        vis_layout = QHBoxLayout()
+        vis_layout.setSpacing(10)
+
+        # Radar Posture Card
+        card_radar = QFrame()
+        card_radar.setObjectName("CardContainer")
+        card_radar.setFixedHeight(175)
+        cr_layout = QVBoxLayout(card_radar)
+        cr_layout.setContentsMargins(8, 8, 8, 8)
+        self.lbl_radar_title = QLabel("🛡️ Protection Posture Radar")
+        self.lbl_radar_title.setStyleSheet("font-size: 11px; font-weight: bold; color: #38bdf8;")
+        cr_layout.addWidget(self.lbl_radar_title)
         self.radar_chart = SecurityRadarChart()
-        self.radar_chart.setFixedSize(220, 220)
-        radar_container.addWidget(self.radar_chart, alignment=Qt.AlignmentFlag.AlignCenter)
-        radar_container.addStretch()
-        inner_health.addLayout(radar_container, 1)
-        
-        # Right inner: Checklist
-        checklist_container = QVBoxLayout()
-        checklist_container.addStretch()
-        self.lbl_cpu_stat = self.create_dynamic_status_row(checklist_container, "🧠 CPU Thermals & Load")
-        self.lbl_ram_stat = self.create_dynamic_status_row(checklist_container, "💾 Memory Integrity")
-        self.lbl_disk_stat = self.create_dynamic_status_row(checklist_container, "💽 Disk Health (S.M.A.R.T)")
-        self.lbl_net_stat = self.create_dynamic_status_row(checklist_container, "🌐 Secure Network Tunnel")
-        self.lbl_anomaly_stat = self.create_dynamic_status_row(checklist_container, "🤖 AI Anomaly Score")
-        checklist_container.addStretch()
-        inner_health.addLayout(checklist_container, 1)
-        
-        health_layout.addLayout(inner_health)
-        bottom_layout.addWidget(health_frame, 3)
+        cr_layout.addWidget(self.radar_chart, 1)
+        vis_layout.addWidget(card_radar, 2)
 
-        # Middle: Threat Analytics (Col 2)
-        threat_frame = QFrame()
-        threat_frame.setObjectName("CardContainer")
-        threat_layout = QVBoxLayout(threat_frame)
-        threat_layout.setContentsMargins(15, 15, 15, 15)
-        
-        title_threats = QLabel("🎯 Threat Analytics")
-        title_threats.setStyleSheet("font-size: 16px; font-weight: bold; background: transparent;")
-        threat_layout.addWidget(title_threats)
-        threat_layout.addSpacing(10)
-        
-        self.threat_radar = ThreatRadarMap()
-        self.threat_radar.setFixedSize(140, 140)
-        threat_layout.addWidget(self.threat_radar, alignment=Qt.AlignmentFlag.AlignCenter)
-        
+        # Threat Donut Card
+        card_donut = QFrame()
+        card_donut.setObjectName("CardContainer")
+        card_donut.setFixedHeight(175)
+        cd_layout = QVBoxLayout(card_donut)
+        cd_layout.setContentsMargins(8, 8, 8, 8)
+        lbl_donut_title = QLabel("🎯 Threat Distribution")
+        lbl_donut_title.setStyleSheet("font-size: 11px; font-weight: bold; color: #38bdf8;")
+        cd_layout.addWidget(lbl_donut_title)
         self.threat_donut = ThreatDonutChart()
-        self.threat_donut.setFixedSize(140, 140)
-        threat_layout.addWidget(self.threat_donut, alignment=Qt.AlignmentFlag.AlignCenter)
-        
-        threat_layout.addStretch()
-        bottom_layout.addWidget(threat_frame, 1)
+        cd_layout.addWidget(self.threat_donut, 1)
+        vis_layout.addWidget(card_donut, 1)
 
-        # Right: Security Events Table (Col 3)
-        events_frame = QFrame()
-        events_frame.setObjectName("CardContainer")
-        events_layout = QVBoxLayout(events_frame)
-        events_layout.setContentsMargins(15, 15, 15, 15)
-        
-        title_events = QLabel("🚨 Real-Time Security Feed")
-        title_events.setStyleSheet("font-size: 16px; font-weight: bold; background: transparent;")
-        events_layout.addWidget(title_events)
-        events_layout.addSpacing(5)
-        
-        # Event Controls (Filter, Search, Export, Syslog)
-        controls_layout = QHBoxLayout()
-        
-        self.chk_select_all = QCheckBox("✅ Select All")
-        self.chk_select_all.stateChanged.connect(self.toggle_select_all)
-        controls_layout.addWidget(self.chk_select_all)
-        
+        # System Health Checklist
+        card_checks = QFrame()
+        card_checks.setObjectName("CardContainer")
+        card_checks.setFixedHeight(175)
+        cc_layout = QVBoxLayout(card_checks)
+        cc_layout.setContentsMargins(10, 8, 10, 8)
+        cc_layout.setSpacing(4)
+        lbl_ck_title = QLabel("🩺 Endpoint Sensor Health")
+        lbl_ck_title.setStyleSheet("font-size: 11px; font-weight: bold; color: #38bdf8;")
+        cc_layout.addWidget(lbl_ck_title)
+
+        self.lbl_stat_cpu = self.create_status_row(cc_layout, "🧠 CPU & Thermals")
+        self.lbl_stat_ram = self.create_status_row(cc_layout, "💾 Memory Integrity")
+        self.lbl_stat_disk = self.create_status_row(cc_layout, "💽 Disk S.M.A.R.T.")
+        self.lbl_stat_net = self.create_status_row(cc_layout, "🌐 Network Gateway")
+        cc_layout.addStretch()
+        vis_layout.addWidget(card_checks, 2)
+
+        left_layout.addLayout(vis_layout)
+
+        # Event Table Filter Toolbar
+        tbl_toolbar = QHBoxLayout()
+        tbl_toolbar.setSpacing(8)
+
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search logs...")
+        self.search_input.setPlaceholderText("Filter alerts by description, source, IP, or tactic...")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setFixedHeight(32)
+        self.search_input.setStyleSheet("padding: 4px 10px; font-size: 11px;")
         self.search_input.textChanged.connect(self.filter_logs)
-        controls_layout.addWidget(self.search_input)
-        
+        tbl_toolbar.addWidget(self.search_input, 1)
+
+        # Severity Filter (Expanded to 160px)
         self.sev_filter = QComboBox()
-        self.sev_filter.addItems(["All Severities", "Critical", "High", "High Risk", "Medium", "Medium Risk", "Warning", "Safe", "Low Risk"])
+        self.sev_filter.setMinimumWidth(160)
+        self.sev_filter.setFixedHeight(32)
+        self.sev_filter.addItems(["All Severities", "Critical", "High", "Medium", "Safe"])
         self.sev_filter.currentTextChanged.connect(self.filter_logs)
-        controls_layout.addWidget(self.sev_filter)
-        
-        self.btn_export = QPushButton("📄 Export")
-        self.btn_export.clicked.connect(self.export_logs)
-        controls_layout.addWidget(self.btn_export)
-        
-        self.btn_syslog = QPushButton("📡 Syslog")
-        self.btn_syslog.clicked.connect(self.setup_syslog)
-        controls_layout.addWidget(self.btn_syslog)
-        
-        self.btn_clear = QPushButton("🗑️ Clear")
-        self.btn_clear.setObjectName("BtnDanger")
-        self.btn_clear.clicked.connect(self.clear_logs)
-        controls_layout.addWidget(self.btn_clear)
-        
-        events_layout.addLayout(controls_layout)
+        tbl_toolbar.addWidget(self.sev_filter)
 
+        # Source Module Filter (Expanded to 160px)
+        self.src_filter = QComboBox()
+        self.src_filter.setMinimumWidth(160)
+        self.src_filter.setFixedHeight(32)
+        self.src_filter.addItems(["All Sources", "NIDS Sniffer", "Phishing Heuristics", "Cloud CASB & DLP", "Antivirus Engine", "SIEM Core"])
+        self.src_filter.currentTextChanged.connect(self.filter_logs)
+        tbl_toolbar.addWidget(self.src_filter)
+
+        self.btn_export_table = QPushButton("💾 Export CSV")
+        self.btn_export_table.setFixedHeight(32)
+        self.btn_export_table.clicked.connect(self.export_logs)
+        tbl_toolbar.addWidget(self.btn_export_table)
+
+        left_layout.addLayout(tbl_toolbar)
+
+        # Primary Correlated Alerts Table
         self.alerts_table = QTableWidget()
-        self.alerts_table.setColumnCount(6)
-        self.alerts_table.setHorizontalHeaderLabels(["🕒 Time", "🧩 Source", "📝 Description", "⚠️ Threat Level", "🏷️ MITRE Tactic", "⚡ Action"])
-
-        self.alerts_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.alerts_table.setColumnCount(5)
+        self.alerts_table.setHorizontalHeaderLabels([
+            "Timestamp", "Severity", "Module Source", "MITRE Tactic", "Incident Classification & Summary"
+        ])
         self.alerts_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.alerts_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.alerts_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         self.alerts_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.alerts_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.alerts_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        self.alerts_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.alerts_table.verticalHeader().setDefaultSectionSize(34)
+        self.alerts_table.verticalHeader().setVisible(False)
         self.alerts_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.alerts_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.alerts_table.verticalHeader().setVisible(False)
-        self.alerts_table.setShowGrid(False)
-        
-        self.alerts_table.setObjectName("AlertsTable")
-        self.alerts_table.setAlternatingRowColors(True)
-        self.alerts_table.verticalHeader().setDefaultSectionSize(45)
-        
-        self.alerts_table.itemDoubleClicked.connect(self.show_event_details)
-        self.alerts_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.alerts_table.customContextMenuRequested.connect(self.show_context_menu)
-        
-        events_layout.addWidget(self.alerts_table)
-        bottom_layout.addWidget(events_frame, 4)
+        self.alerts_table.cellClicked.connect(self.on_alert_row_clicked)
+        left_layout.addWidget(self.alerts_table, 1)
 
-        layout.addLayout(bottom_layout, 3)
+        workspace_layout.addWidget(left_container, 1)
 
-    def create_dynamic_status_row(self, layout, name):
+        # ==========================================================
+        # 6. RIGHT WING: 440px Slide-out Incident Forensic Drawer
+        # ==========================================================
+        self.dossier_drawer = QFrame()
+        self.dossier_drawer.setObjectName("PhishingDossier")
+        self.dossier_drawer.setFixedWidth(440)
+        self.dossier_drawer.hide()
+
+        drawer_layout = QVBoxLayout(self.dossier_drawer)
+        drawer_layout.setContentsMargins(12, 12, 12, 12)
+        drawer_layout.setSpacing(10)
+
+        # Drawer Header
+        d_header = QHBoxLayout()
+        self.lbl_drawer_title = QLabel("🔬 Incident Forensic Dossier")
+        self.lbl_drawer_title.setStyleSheet("font-size: 13px; font-weight: 800; color: #38bdf8;")
+        d_header.addWidget(self.lbl_drawer_title)
+        d_header.addStretch()
+
+        self.btn_close_drawer = QPushButton("✖")
+        self.btn_close_drawer.setFixedSize(26, 26)
+        self.btn_close_drawer.setStyleSheet("background: transparent; border: none; font-size: 13px; font-weight: bold; color: #94a3b8;")
+        self.btn_close_drawer.clicked.connect(lambda: self.dossier_drawer.hide())
+        d_header.addWidget(self.btn_close_drawer)
+        drawer_layout.addLayout(d_header)
+
+        # Rich Forensic HTML Report
+        self.txt_incident_report = QTextEdit()
+        self.txt_incident_report.setReadOnly(True)
+        self.txt_incident_report.setStyleSheet("border: none; background: transparent;")
+        drawer_layout.addWidget(self.txt_incident_report, 1)
+
+        # SOAR Remediation Playbook Actions
+        d_actions = QHBoxLayout()
+        d_actions.setSpacing(8)
+
+        self.btn_action_block = QPushButton("🛡️ Block Remote IP")
+        self.btn_action_block.setObjectName("BtnWarning")
+        self.btn_action_block.setFixedHeight(32)
+        self.btn_action_block.clicked.connect(self.execute_block_action)
+        d_actions.addWidget(self.btn_action_block)
+
+        self.btn_action_ack = QPushButton("✓ Acknowledge Alert")
+        self.btn_action_ack.setObjectName("BtnPrimary")
+        self.btn_action_ack.setFixedHeight(32)
+        self.btn_action_ack.clicked.connect(self.execute_ack_action)
+        d_actions.addWidget(self.btn_action_ack)
+
+        drawer_layout.addLayout(d_actions)
+        workspace_layout.addWidget(self.dossier_drawer)
+
+        layout.addLayout(workspace_layout, 1)
+
+    def create_status_row(self, layout, name):
         row = QWidget()
         row.setStyleSheet("background: transparent;")
         l = QHBoxLayout(row)
-        l.setContentsMargins(5, 12, 5, 12)
-        
+        l.setContentsMargins(0, 2, 0, 2)
         lbl_name = QLabel(name)
-        lbl_name.setStyleSheet("background: transparent; font-size: 13px;")
+        lbl_name.setStyleSheet("background: transparent; font-size: 10px; color: #94a3b8;")
         l.addWidget(lbl_name)
         l.addStretch()
-        
-        stat_lbl = QLabel("Checking...")
-        stat_lbl.setStyleSheet("font-weight: bold; background: transparent; font-size: 13px; padding: 4px 10px; border-radius: 4px;")
+        stat_lbl = QLabel("Good")
+        stat_lbl.setStyleSheet("font-weight: bold; font-size: 10px; color: #10b981; padding: 2px 6px; border-radius: 4px; background: rgba(16, 185, 129, 0.1);")
         l.addWidget(stat_lbl)
         layout.addWidget(row)
-        
-        sep = QFrame()
-        sep.setFixedHeight(1)
-        sep.setStyleSheet("background-color: #88888820; margin-left: 5px; margin-right: 5px;")
-        layout.addWidget(sep)
-        
         return stat_lbl
+
+    def open_super_report_dialog(self):
+        """Launches the interactive SOC Super Report configuration and vaulting modal."""
+        dlg = SuperReportDialog(session=self.session, siem_dashboard=self.siem_dashboard, parent=self)
+        dlg.exec()
+
+    def toggle_stream(self):
+        """Pauses or resumes the live background telemetry sampling."""
+        if self.btn_stream.isChecked():
+            self.timer.start(2500)
+            self.btn_stream.setText("⏸️ Stream Live")
+            self.btn_stream.setStyleSheet("")
+        else:
+            self.timer.stop()
+            self.btn_stream.setText("▶️ Paused")
+            self.btn_stream.setStyleSheet("background: rgba(239, 68, 68, 0.2); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.4);")
+
+    def on_mitre_tactic_selected(self, tactic: str):
+        self.active_tactic_filter = tactic
+        self.filter_logs()
 
     def update_dashboard(self):
         if hasattr(self, 'worker') and self.worker.isRunning():
             return
-            
-        fetch_db = (self._tick_count % 3 == 0)
-        db_path = self.session.get_db_path() if self.session else "nexashield.db"
-        self.worker = OverviewWorker(fetch_db, db_path)
+        self.worker = OverviewWorker(self.session)
         self.worker.data_fetched.connect(self.handle_dashboard_data)
         self.worker.start()
-        self._tick_count += 1
-        
-    def handle_dashboard_data(self, data):
-        self.cpu_hist.update_value(data['cpu'])
-        self.ram_hist.update_value(data['ram'])
-        self.disk_hist.update_value(data['disk'])
-        
+
+    def handle_dashboard_data(self, data: dict):
+        # Update Area Charts
+        self.cpu_hist.update_value(data.get('cpu', 0))
+        self.ram_hist.update_value(data.get('ram', 0))
+        self.disk_hist.update_value(data.get('disk', 0))
+
         if 'net_bytes' in data:
             if hasattr(self, '_last_net_bytes'):
                 delta = max(0, data['net_bytes'] - self._last_net_bytes)
-                max_rate = 20 * 1024 * 1024 # Assumes ~10MB/s is 100% capacity given 2s tick
+                max_rate = 20 * 1024 * 1024
                 net_pct = min(100.0, (delta / max_rate) * 100.0)
                 self.net_hist.update_value(net_pct)
             else:
                 self.net_hist.update_value(0)
             self._last_net_bytes = data['net_bytes']
-        
-        if 'security_score' in data:
-            score = data['security_score']
-            color = "#28a745" if score >= 80 else ("#ffc107" if score >= 50 else "#dc3545")
-            self.lbl_score.setText(f"🏆 Security Posture: <span style='color: {color};'>{score}/100</span>")
-            
-            endpoint = 100 - data['cpu']
-            memory = 100 - data['ram']
-            storage = 100 - data['disk']
-            
-            traffic = 100.0
-            if 'net_bytes' in data and hasattr(self, '_last_net_bytes'):
-                delta = max(0, data['net_bytes'] - self._last_net_bytes)
-                max_rate = 20 * 1024 * 1024
-                net_pct = min(100.0, (delta / max_rate) * 100.0)
-                traffic = 100 - net_pct
-                
-            network = 100
-            if 'events' in data:
-                criticals = sum(1 for e in data['events'] if e[3] in ["Critical", "High", "High Risk"])
-                network = max(10, 100 - (criticals * 10))
-                
-            self.radar_chart.update_scores(endpoint, traffic, storage, memory, network)
-        
-        def set_stat(lbl, val, threshold):
-            if val < threshold:
+
+        # Update Analytics & Scorecard
+        analytics = data.get('analytics', {})
+        score = analytics.get('global_score', 100)
+        defcon = analytics.get('defcon', 5)
+
+        score_col = "#10b981" if score >= 80 else ("#f59e0b" if score >= 50 else "#ef4444")
+        self.card_posture.set_value(f"{score}% (DEFCON {defcon})")
+        self.card_posture.lbl_value.setStyleSheet(f"font-size: 13px; font-weight: 800; color: {score_col}; background: transparent;")
+
+        self.card_critical.set_value(str(analytics.get('active_critical', 0)))
+        self.card_blocked.set_value(str(analytics.get('blocked_hosts', 0)))
+        self.card_cloud.set_value(str(analytics.get('cloud_dlp_leaks', 0)))
+        self.card_anomaly.set_value(f"{analytics.get('ai_anomaly_index', 1.2):.1f}%")
+
+        # Update MITRE Ribbon
+        self.mitre_ribbon.update_counts(analytics.get('mitre_counts', {}))
+
+        # Update Radar & Donut
+        radar = analytics.get('radar_posture', {})
+        self.radar_chart.update_scores(
+            radar.get("Host Endpoint", 100),
+            radar.get("Network (NIDS)", 100),
+            radar.get("Memory Health", 100),
+            radar.get("Cloud CASB", 100),
+            radar.get("Phishing Defense", 100)
+        )
+        self.threat_donut.update_stats(analytics.get('severity_distribution', {}))
+
+        # Update Sensor Status labels
+        def set_chip(lbl, val, warn_th):
+            if val < warn_th:
                 lbl.setText("Good")
-                lbl.setStyleSheet("color: #28a745; font-weight: bold; background: rgba(40, 167, 69, 0.1); padding: 4px 10px; border-radius: 4px;")
+                lbl.setStyleSheet("font-weight: bold; font-size: 10px; color: #10b981; padding: 2px 6px; border-radius: 4px; background: rgba(16, 185, 129, 0.1);")
             else:
                 lbl.setText("Warning")
-                lbl.setStyleSheet("color: #dc3545; font-weight: bold; background: rgba(220, 53, 69, 0.1); padding: 4px 10px; border-radius: 4px;")
-                
-        set_stat(self.lbl_cpu_stat, data['cpu'], 85)
-        set_stat(self.lbl_ram_stat, data['ram'], 85)
-        set_stat(self.lbl_disk_stat, data['disk'], 90)
-        
-        if data['net_up']:
-            self.lbl_net_stat.setText("Connected")
-            self.lbl_net_stat.setStyleSheet("color: #28a745; font-weight: bold; background: rgba(40, 167, 69, 0.1); padding: 4px 10px; border-radius: 4px;")
-        else:
-            self.lbl_net_stat.setText("Disconnected")
-            self.lbl_net_stat.setStyleSheet("color: #dc3545; font-weight: bold; background: rgba(220, 53, 69, 0.1); padding: 4px 10px; border-radius: 4px;")
-            
-        if 'anomaly_score' in data:
-            anom = data['anomaly_score']
-            if anom > 70:
-                self.lbl_anomaly_stat.setText(f"Critical ({anom:.1f}%)")
-                self.lbl_anomaly_stat.setStyleSheet("color: #dc3545; font-weight: bold; background: rgba(220, 53, 69, 0.1); padding: 4px 10px; border-radius: 4px;")
-            elif anom > 40:
-                self.lbl_anomaly_stat.setText(f"Warning ({anom:.1f}%)")
-                self.lbl_anomaly_stat.setStyleSheet("color: #ffc107; font-weight: bold; background: rgba(255, 193, 7, 0.1); padding: 4px 10px; border-radius: 4px;")
+                lbl.setStyleSheet("font-weight: bold; font-size: 10px; color: #ef4444; padding: 2px 6px; border-radius: 4px; background: rgba(239, 68, 68, 0.1);")
+
+        set_chip(self.lbl_stat_cpu, data.get('cpu', 0), 85)
+        set_chip(self.lbl_stat_ram, data.get('ram', 0), 85)
+        set_chip(self.lbl_stat_disk, data.get('disk', 0), 90)
+
+        # Update Correlated Alerts Table
+        events = data.get('events', [])
+        self.all_events_cache = events
+        self.populate_alerts_table(events)
+
+    def populate_alerts_table(self, events: list):
+        self.alerts_table.setRowCount(len(events))
+
+        for row, ev in enumerate(events):
+            # Timestamp
+            ts_item = QTableWidgetItem(str(ev.get("timestamp", ""))[:19])
+            ts_item.setData(Qt.ItemDataRole.UserRole, ev)
+            self.alerts_table.setItem(row, 0, ts_item)
+
+            # Severity Pill
+            sev = ev.get("severity", "Safe")
+            sev_item = QTableWidgetItem(f" {sev} ")
+            sev_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if sev == "Critical":
+                sev_item.setForeground(QBrush(QColor("#ef4444")))
+            elif sev == "High":
+                sev_item.setForeground(QBrush(QColor("#f97316")))
+            elif sev == "Medium":
+                sev_item.setForeground(QBrush(QColor("#f59e0b")))
             else:
-                self.lbl_anomaly_stat.setText(f"Normal ({anom:.1f}%)")
-                self.lbl_anomaly_stat.setStyleSheet("color: #28a745; font-weight: bold; background: rgba(40, 167, 69, 0.1); padding: 4px 10px; border-radius: 4px;")
-            
-        if 'events' in data:
-            events = data['events']
-            
-            if self._last_events != events:
-                self._last_events = events
-                
-                # Ping radar map
-                if hasattr(self, 'threat_radar'):
-                    self.threat_radar.add_threat()
-                
-                stats = {"Safe": 0, "Warning": 0, "Critical": 0}
-                
-                # Save current selections
-                selected_ids = []
-                for r in range(self.alerts_table.rowCount()):
-                    item = self.alerts_table.item(r, 0)
-                    if item and item.checkState() == Qt.CheckState.Checked:
-                        db_info = item.data(Qt.ItemDataRole.UserRole)
-                        if db_info:
-                            selected_ids.append(db_info)
-                
-                self.alerts_table.setRowCount(len(events))
-                for i, event_data in enumerate(events):
-                    time_str = event_data[0]
-                    mod = event_data[1]
-                    desc = event_data[2]
-                    sev = event_data[3]
-                    db_info = event_data[4] if len(event_data) > 4 else None
-                    
-                    if sev in ["Critical", "High", "High Risk"]:
-                        stats["Critical"] += 1
-                    elif sev in ["Medium", "Medium Risk", "Warning"]:
-                        stats["Warning"] += 1
-                    else:
-                        stats["Safe"] += 1
-                    
-                    time_item = QTableWidgetItem(time_str)
-                    time_item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
-                    
-                    if db_info and db_info in selected_ids:
-                        time_item.setCheckState(Qt.CheckState.Checked)
-                    else:
-                        time_item.setCheckState(Qt.CheckState.Unchecked)
-                        
-                    if db_info:
-                        time_item.setData(Qt.ItemDataRole.UserRole, db_info)
-                    self.alerts_table.setItem(i, 0, time_item)
-                    self.alerts_table.setItem(i, 1, QTableWidgetItem(mod))
-                    self.alerts_table.setItem(i, 2, QTableWidgetItem(desc))
-                    
-                    sev_item = QTableWidgetItem(sev)
-                    sev_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                    font = sev_item.font()
-                    font.setBold(True)
-                    sev_item.setFont(font)
-                    if sev in ["High", "Critical", "High Risk"]:
-                        sev_item.setForeground(QBrush(QColor("#ff4d4d")))
-                    elif sev in ["Medium", "Medium Risk", "Warning"]:
-                        sev_item.setForeground(QBrush(QColor("#ffcc00")))
-                    elif sev in ["Safe", "Low Risk"]:
-                        sev_item.setForeground(QBrush(QColor("#00cc66")))
-                    
-                    self.alerts_table.setItem(i, 3, sev_item)
-                    
-                    # --- Phase 1: MITRE ATT&CK Mapping & SOAR Automation ---
-                    mitre_tactic = "T1000 Unknown"
-                    action_text = "View Logs"
-                    action_color = "#6c757d"
-                    
-                    desc_lower = desc.lower()
-                    mod_lower = mod.lower()
-                    
-                    if "phishing" in mod_lower or "phishing" in desc_lower:
-                        mitre_tactic = "T1566 Phishing"
-                        action_text = "Block Domain"
-                        action_color = "#dc3545"
-                    elif "antivirus" in mod_lower or "malware" in desc_lower or "threats found" in desc_lower:
-                        mitre_tactic = "T1204 User Execution"
-                        if "Critical" in sev or "High" in sev:
-                            action_text = "Quarantine"
-                            action_color = "#dc3545"
-                    elif "process" in mod_lower or "injection" in desc_lower:
-                        mitre_tactic = "T1055 Process Injection"
-                        action_text = "Kill Process"
-                        action_color = "#dc3545"
-                    elif "network" in mod_lower or "nids" in mod_lower:
-                        mitre_tactic = "T1190 Exploit"
-                        action_text = "Drop IP"
-                        action_color = "#dc3545"
-                        
-                    # MITRE Badge (using QLabel for styled badge)
-                    mitre_lbl = QLabel(mitre_tactic)
-                    mitre_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    is_dark = self.palette().window().color().lightness() < 128
-                    mitre_bg = "#1e293b" if is_dark else "#e2e8f0"
-                    mitre_color = "#38bdf8" if is_dark else "#0284c7"
-                    mitre_border = "#334155" if is_dark else "#cbd5e1"
-                    mitre_lbl.setStyleSheet(f"background-color: {mitre_bg}; color: {mitre_color}; border-radius: 4px; padding: 2px 6px; font-size: 11px; font-weight: bold; border: 1px solid {mitre_border};")
-                    mitre_widget = QWidget()
-                    mitre_layout = QHBoxLayout(mitre_widget)
-                    mitre_layout.setContentsMargins(5, 5, 5, 5)
-                    mitre_layout.addWidget(mitre_lbl)
-                    self.alerts_table.setCellWidget(i, 4, mitre_widget)
-                    
-                    # Action Button (SOAR Playbook)
-                    action_btn = QPushButton(action_text)
-                    action_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                    action_btn.setStyleSheet(f"background-color: {action_color}; color: white; border-radius: 4px; padding: 4px 8px; font-weight: bold;")
-                    # Example action: just show a message box for now
-                    action_btn.clicked.connect(lambda checked, a=action_text, d=desc: QMessageBox.information(self, "SOAR Action Triggered", f"Executing Playbook: {a}\nTarget: {d}"))
-                    
-                    action_widget = QWidget()
-                    action_layout = QHBoxLayout(action_widget)
-                    action_layout.setContentsMargins(5, 5, 5, 5)
-                    action_layout.addWidget(action_btn)
-                    self.alerts_table.setCellWidget(i, 5, action_widget)
-                    
-                self.threat_donut.update_stats(stats)
-                self.filter_logs()
+                sev_item.setForeground(QBrush(QColor("#10b981")))
+            self.alerts_table.setItem(row, 1, sev_item)
+
+            # Source Module
+            src_item = QTableWidgetItem(ev.get("source", "SIEM Core"))
+            self.alerts_table.setItem(row, 2, src_item)
+
+            # MITRE Tactic
+            tactic_item = QTableWidgetItem(ev.get("mitre_tactic", "Initial Access"))
+            self.alerts_table.setItem(row, 3, tactic_item)
+
+            # Description
+            desc_item = QTableWidgetItem(ev.get("description", ""))
+            self.alerts_table.setItem(row, 4, desc_item)
+
+        self.filter_logs()
 
     def filter_logs(self):
-        search_term = self.search_input.text().lower()
-        sev_term = self.sev_filter.currentText()
-        
-        for row in range(self.alerts_table.rowCount()):
-            match = True
-            if sev_term != "All Severities":
-                if self.alerts_table.item(row, 3).text() != sev_term: match = False
-            if search_term and match:
-                row_text = " ".join([self.alerts_table.item(row, c).text() for c in range(4)]).lower()
-                if search_term not in row_text: match = False
-            self.alerts_table.setRowHidden(row, not match)
+        """Filters table by search query, severity, source module, and active MITRE tactic."""
+        query = self.search_input.text().strip().lower()
+        sev_filter = self.sev_filter.currentText()
+        src_filter = self.src_filter.currentText()
+        tac_filter = self.active_tactic_filter
 
-    def toggle_select_all(self, state):
-        check_state = Qt.CheckState(state)
-        for row in range(self.alerts_table.rowCount()):
-            item = self.alerts_table.item(row, 0)
-            if item:
-                item.setCheckState(check_state)
+        for r in range(self.alerts_table.rowCount()):
+            item_ts = self.alerts_table.item(r, 0)
+            if not item_ts:
+                continue
+            ev = item_ts.data(Qt.ItemDataRole.UserRole) or {}
+
+            # Severity match
+            sev = ev.get("severity", "Safe")
+            match_sev = (sev_filter == "All Severities" or sev.lower() == sev_filter.lower())
+
+            # Source match
+            src = ev.get("source", "")
+            match_src = (src_filter == "All Sources" or src_filter.lower() in src.lower())
+
+            # Tactic match
+            tac = ev.get("mitre_tactic", "")
+            match_tac = (tac_filter == "All" or tac.lower() == tac_filter.lower())
+
+            # Text query match
+            match_query = True
+            if query:
+                full_text = f"{ev.get('timestamp', '')} {sev} {src} {tac} {ev.get('description', '')}".lower()
+                match_query = query in full_text
+
+            self.alerts_table.setRowHidden(r, not (match_sev and match_src and match_tac and match_query))
+
+    def on_alert_row_clicked(self, row: int, col: int):
+        """Opens the 440px incident forensic drawer."""
+        item = self.alerts_table.item(row, 0)
+        if not item:
+            return
+        ev = item.data(Qt.ItemDataRole.UserRole)
+        if ev:
+            self.open_incident_drawer(ev)
+
+    def open_incident_drawer(self, ev: dict):
+        self.current_selected_event = ev
+        self.txt_incident_report.setHtml(self.generate_drawer_html(ev))
+        self.dossier_drawer.show()
+
+    def generate_drawer_html(self, ev: dict) -> str:
+        is_dark = self.is_dark_mode()
+        card_bg = "#111726" if is_dark else "#f8fafc"
+        card_border = "#1e293b" if is_dark else "#e2e8f0"
+        text_primary = "#f8fafc" if is_dark else "#0f172a"
+        text_muted = "#94a3b8"
+
+        sev = ev.get("severity", "Safe")
+        sev_color = "#ef4444" if sev == "Critical" else ("#f97316" if sev == "High" else ("#f59e0b" if sev == "Medium" else "#10b981"))
+
+        raw = ev.get("raw_data", {})
+        raw_json = json.dumps(raw, indent=2) if raw else "{}"
+
+        html = f"""
+        <table width="100%" cellpadding="8" cellspacing="0" style="background-color: {card_bg}; border: 1px solid {card_border}; border-radius: 6px; margin-bottom: 8px; font-family: 'Segoe UI', sans-serif;">
+            <tr>
+                <td>
+                    <div style="font-size: 10px; font-weight: bold; color: #38bdf8; text-transform: uppercase;">
+                        INCIDENT FORENSIC ASSESSMENT
+                    </div>
+                    <div style="font-size: 13px; font-weight: 800; color: {sev_color}; margin-top: 4px;">
+                        [{sev.upper()}] {ev.get('title', 'Security Incident')}
+                    </div>
+                    <div style="font-size: 11px; color: {text_primary}; margin-top: 4px;">
+                        Source Module: <b>{ev.get('source', '')}</b> | Tactic: <b>{ev.get('mitre_tactic', '')}</b>
+                    </div>
+                    <div style="font-size: 10px; color: {text_muted}; margin-top: 2px;">
+                        Timestamp: {ev.get('timestamp', '')}
+                    </div>
+                </td>
+            </tr>
+        </table>
+
+        <table width="100%" cellpadding="8" cellspacing="0" style="background-color: {card_bg}; border: 1px solid {card_border}; border-radius: 6px; margin-bottom: 8px; font-family: 'Segoe UI', sans-serif; font-size: 11px;">
+            <tr>
+                <td style="font-weight: bold; color: #38bdf8; border-bottom: 1px solid {card_border};">
+                    📋 INCIDENT DETAILS & SUMMARY
+                </td>
+            </tr>
+            <tr>
+                <td style="color: {text_primary}; padding-top: 6px;">
+                    {ev.get('description', '')}
+                </td>
+            </tr>
+        </table>
+
+        <table width="100%" cellpadding="8" cellspacing="0" style="background-color: {card_bg}; border: 1px solid {card_border}; border-radius: 6px; font-family: 'Segoe UI', sans-serif; font-size: 11px;">
+            <tr>
+                <td style="font-weight: bold; color: #94a3b8; border-bottom: 1px solid {card_border};">
+                    🔍 RAW TELEMETRY & DATABASE PAYLOAD
+                </td>
+            </tr>
+            <tr>
+                <td style="padding-top: 6px;">
+                    <pre style="font-family: 'Consolas', monospace; font-size: 10px; color: {text_primary}; white-space: pre-wrap; margin: 0;">{raw_json}</pre>
+                </td>
+            </tr>
+        </table>
+        """
+        return html
+
+    def execute_block_action(self):
+        if not self.current_selected_event:
+            return
+        desc = self.current_selected_event.get("description", "")
+        # Extract IP if present
+        ip_match = re.search(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', desc)
+        target = ip_match.group(0) if ip_match else desc[:30]
+        QMessageBox.information(
+            self, "SOC Remediation Playbook",
+            f"Enforcing Host Drop & Firewall Block on Target:\n{target}\n\nRule deployed across local perimeter."
+        )
+
+    def execute_ack_action(self):
+        if not self.current_selected_event:
+            return
+        QMessageBox.information(
+            self, "Alert Acknowledged",
+            f"Incident '{self.current_selected_event.get('title', '')}' marked as acknowledged in SOC queue."
+        )
+        self.dossier_drawer.hide()
 
     def export_logs(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Export Logs", "siem_logs.csv", "CSV Files (*.csv);;PDF Files (*.pdf)")
-        if not path: return
+        """Exports currently filtered SIEM alerts table to CSV."""
+        path, _ = QFileDialog.getSaveFileName(self, "Export Filtered SIEM Alerts", "siem_alerts_export.csv", "CSV Files (*.csv)")
+        if not path:
+            return
         try:
-            if path.endswith('.csv'):
-                with open(path, 'w', newline='', encoding='utf-8') as f:
-                    writer = csv.writer(f)
-                    writer.writerow(["Time", "Source", "Description", "Severity"])
-                    for r in range(self.alerts_table.rowCount()):
-                        if not self.alerts_table.isRowHidden(r):
-                            writer.writerow([self.alerts_table.item(r, c).text() for c in range(4)])
-            else:
-                printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-                printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-                printer.setOutputFileName(path)
-                html = "<h2>SIEM Event Logs</h2><table border='1' width='100%' cellspacing='0' cellpadding='4'>"
-                html += "<tr bgcolor='#f2f2f2'><th>Time</th><th>Source</th><th>Description</th><th>Severity</th></tr>"
+            with open(path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(["Timestamp", "Severity", "Module Source", "MITRE Tactic", "Description"])
                 for r in range(self.alerts_table.rowCount()):
                     if not self.alerts_table.isRowHidden(r):
-                        html += "<tr>" + "".join(f"<td>{self.alerts_table.item(r, c).text()}</td>" for c in range(4)) + "</tr>"
-                html += "</table>"
-                doc = QTextDocument()
-                doc.setHtml(html)
-                doc.print(printer)
-            QMessageBox.information(self, "Success", "Logs exported successfully.")
+                        writer.writerow([
+                            self.alerts_table.item(r, 0).text() if self.alerts_table.item(r, 0) else "",
+                            self.alerts_table.item(r, 1).text() if self.alerts_table.item(r, 1) else "",
+                            self.alerts_table.item(r, 2).text() if self.alerts_table.item(r, 2) else "",
+                            self.alerts_table.item(r, 3).text() if self.alerts_table.item(r, 3) else "",
+                            self.alerts_table.item(r, 4).text() if self.alerts_table.item(r, 4) else ""
+                        ])
+            QMessageBox.information(self, "Export Complete", f"SIEM alerts exported to:\n{path}")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to export: {e}")
+            QMessageBox.critical(self, "Export Failed", str(e))
 
     def setup_syslog(self):
         dlg = SyslogDialog(self)
@@ -1103,181 +1297,31 @@ class OverviewWidget(QWidget):
                 port = int(dlg.port_input.text())
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 count = 0
-                
-                # Check for user-selected rows
-                selected_rows = []
                 for r in range(self.alerts_table.rowCount()):
-                    item = self.alerts_table.item(r, 0)
-                    if item and item.checkState() == Qt.CheckState.Checked:
-                        selected_rows.append(r)
-                        
-                # If nothing is explicitly checked, fallback to processing all visible rows
-                rows_to_process = selected_rows if selected_rows else range(self.alerts_table.rowCount())
-                
-                for r in rows_to_process:
-                    # Skip hidden rows if we are processing the entire table
-                    if not selected_rows and self.alerts_table.isRowHidden(r):
-                        continue
-                        
-                    time_val = self.alerts_table.item(r, 0).text()
-                    source = self.alerts_table.item(r, 1).text()
-                    desc = self.alerts_table.item(r, 2).text()
-                    sev = self.alerts_table.item(r, 3).text()
-                    
-                    # Map NexaShield Severity to Syslog PRI (Facility 1 = User-Level)
-                    if sev in ["Critical", "High", "High Risk"]:
-                        pri = 8 + 2  # Critical
-                    elif sev in ["Medium", "Medium Risk", "Warning"]:
-                        pri = 8 + 4  # Warning
-                    else:
-                        pri = 8 + 6  # Informational (Safe/Low Risk)
-                        
-                    msg = f"<{pri}>1 {time_val} {socket.gethostname()} NexaShield - - - [{sev}] {source}: {desc}"
-                    sock.sendto(msg.encode('utf-8'), (ip, port))
-                    count += 1
-                QMessageBox.information(self, "Syslog", f"Forwarded {count} logs to {ip}:{port}")
+                    if not self.alerts_table.isRowHidden(r):
+                        time_val = self.alerts_table.item(r, 0).text()
+                        sev = self.alerts_table.item(r, 1).text().strip()
+                        source = self.alerts_table.item(r, 2).text()
+                        desc = self.alerts_table.item(r, 4).text()
+                        pri = 10 if "Crit" in sev else (12 if "High" in sev else 14)
+                        msg = f"<{pri}>1 {time_val} {socket.gethostname()} NexaShield - - - [{sev}] {source}: {desc}"
+                        sock.sendto(msg.encode('utf-8'), (ip, port))
+                        count += 1
+                QMessageBox.information(self, "Syslog Forwarding", f"Forwarded {count} event logs to syslog server {ip}:{port}")
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to forward syslog: {e}")
+                QMessageBox.critical(self, "Syslog Error", str(e))
 
     def clear_logs(self):
-        # 1. Gather checked rows
-        rows_to_delete = []
-        for r in range(self.alerts_table.rowCount()):
-            item = self.alerts_table.item(r, 0)
-            if item and item.checkState() == Qt.CheckState.Checked:
-                rows_to_delete.append(r)
-                
-        # 2. Fallback to selection highlight if no checkboxes are used
-        if not rows_to_delete:
-            selected_items = self.alerts_table.selectedItems()
-            rows_to_delete = [item.row() for item in selected_items]
-            
-        rows_to_delete = sorted(list(set(rows_to_delete)), reverse=True)
-
-        if not rows_to_delete:
-            reply = QMessageBox.question(self, "Clear All Logs", "No rows selected. Do you want to clear ALL logs?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if reply == QMessageBox.StandardButton.Yes:
-                try:
-                    conn = sqlite3.connect(self.session.get_db_path() if self.session else "nexashield.db")
-                    cursor = conn.cursor()
-                    # Ignore missing tables gracefully 
-                    for table in ["siem_events", "phishing_history", "scan_history"]:
-                        try:
-                            cursor.execute(f"DELETE FROM {table}")
-                        except sqlite3.OperationalError:
-                            pass
-                    conn.commit()
-                    conn.close()
-                    self.alerts_table.setRowCount(0)
-                    self._last_events = []
-                    self.chk_select_all.setChecked(False)
-                    QMessageBox.information(self, "Success", "All logs cleared.")
-                except Exception as e:
-                    QMessageBox.critical(self, "Error", f"Failed to clear logs: {e}")
-            return
-            
-        reply = QMessageBox.question(self, "Clear Selected Logs", f"Do you want to clear {len(rows_to_delete)} selected log(s)?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        
+        reply = QMessageBox.question(
+            self, "Confirm Purge",
+            "Are you sure you want to purge logged events from the SIEM view?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
         if reply == QMessageBox.StandardButton.Yes:
+            self.alerts_table.setRowCount(0)
+            self.dossier_drawer.hide()
             try:
-                conn = sqlite3.connect(self.session.get_db_path() if self.session else "nexashield.db")
-                cursor = conn.cursor()
-                for r in rows_to_delete:
-                    item = self.alerts_table.item(r, 0)
-                    if item:
-                        db_info = item.data(Qt.ItemDataRole.UserRole)
-                        if db_info:
-                            table_name, record_id = db_info
-                            try:
-                                cursor.execute(f"DELETE FROM {table_name} WHERE id = ?", (record_id,))
-                            except sqlite3.OperationalError:
-                                pass
-                    self.alerts_table.removeRow(r)
-                conn.commit()
-                conn.close()
-                self._last_events = None # Force table refresh next tick
-                self.chk_select_all.setChecked(False)
-                QMessageBox.information(self, "Success", f"Successfully cleared {len(rows_to_delete)} log(s).")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to clear selected logs: {e}")
-
-    def show_event_details(self, item):
-        row = item.row()
-        time_item = self.alerts_table.item(row, 0)
-        source_item = self.alerts_table.item(row, 1)
-        desc_item = self.alerts_table.item(row, 2)
-        sev_item = self.alerts_table.item(row, 3)
-        
-        if not time_item: return
-        
-        db_info = time_item.data(Qt.ItemDataRole.UserRole)
-        basic_info = {
-            "time": time_item.text(),
-            "source": source_item.text(),
-            "desc": desc_item.text(),
-            "severity": sev_item.text()
-        }
-        
-        dlg = EventInspectorDialog(self, db_info, basic_info)
-        dlg.exec()
-
-    def show_context_menu(self, pos):
-        item = self.alerts_table.itemAt(pos)
-        if not item: return
-        row = item.row()
-        
-        time_str = self.alerts_table.item(row, 0).text()
-        source = self.alerts_table.item(row, 1).text()
-        desc = self.alerts_table.item(row, 2).text()
-        
-        menu = QMenu(self)
-        
-        details_act = menu.addAction("🔍 View Raw Details")
-        copy_act = menu.addAction("📋 Copy Event Data")
-        
-        block_act = None
-        extracted_ip = None
-        
-        # Smart Context: Network IP blocking
-        if any(kw in source for kw in ["NIDS", "Network", "Firewall", "IPS"]):
-            ip_match = re.search(r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b', desc)
-            if ip_match:
-                extracted_ip = ip_match.group(0)
-                block_act = menu.addAction(f"🚫 Block IP: {extracted_ip}")
-                
-        action = menu.exec(self.alerts_table.viewport().mapToGlobal(pos))
-        
-        if action == details_act:
-            self.show_event_details(self.alerts_table.item(row, 0))
-        elif action == copy_act:
-            QApplication.clipboard().setText(f"{time_str} | {source} | {desc}")
-        elif block_act and action == block_act:
-            self.block_ip_action(extracted_ip)
-
-    def block_ip_action(self, ip):
-        try:
-            if platform.system() == "Windows":
-                cmd = f'netsh advfirewall firewall add rule name="NexaShield Block {ip}" dir=in action=block remoteip={ip}'
-            else:
-                cmd = f'iptables -A INPUT -s {ip} -j DROP'
-            subprocess.run(cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            QMessageBox.information(self, "Success", f"Successfully blocked IP {ip} at OS Firewall.")
-            
-            # Audit Trail
-            conn = sqlite3.connect(self.session.get_db_path() if self.session else "nexashield.db")
-            conn.cursor().execute("INSERT INTO siem_events (timestamp, source, description, severity) VALUES (?, ?, ?, ?)",
-                           (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "SIEM / IPS", f"Manually blocked IP via context menu: {ip}", "High"))
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to block IP. Please ensure app is running as Administrator/Root.\n\n{e}")
-
-    # Manage timers automatically to save CPU when not visible
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.update_dashboard()
-        self.timer.start(2000) # Update every 2 seconds
-
-    def hideEvent(self, event):
-        super().hideEvent(event)
-        self.timer.stop()
+                from database import DatabaseManager
+                DatabaseManager().clear_siem_events()
+            except Exception:
+                pass

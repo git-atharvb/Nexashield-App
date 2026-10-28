@@ -106,8 +106,13 @@ class FilesWidget(QWidget):
         
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["ID", "File Name", "Source", "Type", "Threat Level", "Date"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.table.horizontalHeader().setMinimumSectionSize(60)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(2, 130)
+        self.table.setColumnWidth(3, 65)
+        self.table.setColumnWidth(4, 90)
+        self.table.setColumnWidth(5, 135)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.itemSelectionChanged.connect(self.on_file_select)
@@ -127,7 +132,36 @@ class FilesWidget(QWidget):
         # In-App Previewer
         self.preview_box = QGroupBox("In-App Rich Previewer")
         preview_layout = QVBoxLayout(self.preview_box)
-        
+
+        # Top zoom controls bar
+        top_bar = QHBoxLayout()
+        lbl_v = QLabel("Document Viewer")
+        lbl_v.setStyleSheet("font-weight: bold; color: #38bdf8; font-size: 11px;")
+        top_bar.addWidget(lbl_v)
+        top_bar.addStretch()
+
+        if HAS_PDF:
+            btn_fit_w = QPushButton("Fit Width")
+            btn_fit_w.setStyleSheet("padding: 2px 7px; font-size: 10px; background-color: #1e293b; color: #f8fafc; border: 1px solid #334155; border-radius: 3px;")
+            btn_fit_w.clicked.connect(lambda: self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth))
+            top_bar.addWidget(btn_fit_w)
+
+            btn_fit_p = QPushButton("Fit Page")
+            btn_fit_p.setStyleSheet("padding: 2px 7px; font-size: 10px; background-color: #1e293b; color: #f8fafc; border: 1px solid #334155; border-radius: 3px;")
+            btn_fit_p.clicked.connect(lambda: self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitInView))
+            top_bar.addWidget(btn_fit_p)
+
+            btn_zin = QPushButton("+")
+            btn_zin.setStyleSheet("padding: 2px 7px; font-size: 10px; background-color: #1e293b; color: #f8fafc; border: 1px solid #334155; border-radius: 3px;")
+            btn_zin.clicked.connect(lambda: self.pdf_view.setZoomFactor(self.pdf_view.zoomFactor() * 1.2))
+            top_bar.addWidget(btn_zin)
+
+            btn_zout = QPushButton("-")
+            btn_zout.setStyleSheet("padding: 2px 7px; font-size: 10px; background-color: #1e293b; color: #f8fafc; border: 1px solid #334155; border-radius: 3px;")
+            btn_zout.clicked.connect(lambda: self.pdf_view.setZoomFactor(max(0.3, self.pdf_view.zoomFactor() * 0.8)))
+            top_bar.addWidget(btn_zout)
+
+        preview_layout.addLayout(top_bar)
         self.preview_stack = QStackedWidget()
         
         # 0: Text preview
@@ -154,7 +188,7 @@ class FilesWidget(QWidget):
         
         splitter.addWidget(left_panel)
         splitter.addWidget(right_panel)
-        splitter.setSizes([450, 550])
+        splitter.setSizes([460, 680])
         
         main_layout.addWidget(splitter)
         
@@ -217,6 +251,7 @@ class FilesWidget(QWidget):
                 os.write(fd, raw_bytes)
                 os.close(fd)
                 self.pdf_doc.load(temp_path)
+                self.pdf_view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
             return
             
         self.preview_stack.setCurrentIndex(0)

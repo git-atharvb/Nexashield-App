@@ -1,0 +1,77 @@
+=== NEXASHIELD MASTER SUPER REPORT: EXECUTIVE SCORECARD ===
+Report ID,SR-1793213956
+Timestamp,2026-10-29 00:29:16
+Target Host,ATHARV
+Operator,Atharva
+OS,Windows 11 (64bit)
+Global Posture Score,10%
+DEFCON Level,1
+Active Critical Incidents,6
+Blocked Hostile IPs,0
+Cloud DLP Leaks,6
+AI Anomaly Deviation,75.0%
+Forensic Audit SHA-256,886c88ea1a9e2f8ad3b1626f09d8a9b62b14afdd36447a90e747e45124c328b8
+
+=== MITRE ATT&CK TACTICAL DISTRIBUTION ===
+Initial Access,Execution,Persistence,Privilege Escalation,Defense Evasion,Credential Access,Lateral Movement,Exfiltration
+7,0,0,0,0,4,0,1
+
+=== HOST HARDWARE & SYSTEM ENVIRONMENTAL TELEMETRY ===
+Metric,Value
+Physical CPU Cores,4
+Logical CPU Cores,8
+CPU Percent,37.5%
+Total RAM (GB),7.75
+Used RAM (GB),6.96
+RAM Percent,89.8%
+Network Sent (MB),880.7
+Network Recv (MB),115.4
+Boot Time,2026-10-28 17:41:33
+
+=== ACTIVE PROCESS EXECUTION FORENSICS ===
+PID,Name,Username,CPU %,RAM %,Status
+0,System Idle Process,NT AUTHORITY\SYSTEM,359.8,9.848578111535148e-05,running
+5800,python.exe,ATHARV\Atharva,1.2,0.484894743321433,running
+9324,powershell.exe,ATHARV\Atharva,0.0,0.7689277360581066,running
+
+=== NETWORK SOCKETS & PORT TELEMETRY ===
+Protocol,Local Address,Remote Address,Status,PID
+
+=== PHISHING THREAT INTELLIGENCE SCANS ===
+ID,Timestamp,Target URL,Threat Level,Score,Method,Domain,Resolved IP
+
+=== NETWORK INTRUSION DETECTION (NIDS) LOGS ===
+ID,Timestamp,Protocol,Source IP,Destination IP,Signature,Risk Level
+
+=== CLOUD CASB ASSETS & SENSITIVE DATA LEAKS ===
+ID,Asset Name,MIME Type,Size,Sharing Posture,Security Score,Findings
+file_pub_01,corporate_brand_identity_guide_2026.pdf,application/pdf,1542000,,100,Public Internet Exposure (1)
+file_eng_02,server_ssh_root_key.pem,application/x-pem-file,1675,,100,"Public Internet Exposure (1), Cryptographic Private Key (1)"
+file_hr_01,employee_kyc_and_tax_records.txt,text/plain,3210,,100,Social Security Number (SSN) (2)
+file_eng_01,production_aws_deploy.env,text/plain,1820,,100,"Public Internet Exposure (1), AWS Access Key (1), AWS Secret Key (1), GitHub Personal Access Token (1), OpenAI / Anthropic API Key (1), Database Connection URI (1)"
+file_fin_01,q3_corporate_card_transactions.csv,text/csv,4820,,100,"Public Internet Exposure (1), Credit Card (1)"
+file_fin_02,invoice_auto_processor.vbs,text/vbscript,2450,,75,"External Domain Share (1), Executable Script / Macro Dropper (1), Malicious Phishing / C2 Link (1)"
+file_eng_03,system_architecture_whitepaper.md,text/markdown,12400,,0,Clean (No Violations)
+fldr_pub,📁 Public Marketing Assets,application/vnd.google-apps.folder,Folder,,0,Clean (No Violations)
+fldr_hr,📁 Employee KYC & Payroll,application/vnd.google-apps.folder,Folder,,0,Clean (No Violations)
+fldr_eng,📁 Cloud Infrastructure & DevOps,application/vnd.google-apps.folder,Folder,,0,Clean (No Violations)
+fldr_fin,📁 Finance & Treasury,application/vnd.google-apps.folder,Folder,,0,Clean (No Violations)
+root,My Drive,application/vnd.google-apps.folder,Folder,,0,Clean (No Violations)
+
+=== ANTIVIRUS SCAN & QUARANTINE LOGS ===
+ID,Scan Type,Files Scanned,Threats Neutralized,Timestamp
+
+=== UNIFIED SIEM SECURITY INCIDENT CORRELATION FEED ===
+ID,Timestamp,Severity,Source Module,MITRE Tactic,Description
+cloud_file_pub_01,2026-10-28 23:22:49,Critical,Cloud CASB & DLP,Exfiltration,Asset 'corporate_brand_identity_guide_2026.pdf' [Private] Security Findings: Public Internet Exposure (1)
+cloud_file_eng_02,2026-10-28 23:22:49,Critical,Cloud CASB & DLP,Credential Access,"Asset 'server_ssh_root_key.pem' [Private] Security Findings: Public Internet Exposure (1), Cryptographic Private Key (1)"
+cloud_file_hr_01,2026-10-28 23:22:49,Critical,Cloud CASB & DLP,Credential Access,Asset 'employee_kyc_and_tax_records.txt' [Private] Security Findings: Social Security Number (SSN) (2)
+cloud_file_eng_01,2026-10-28 23:22:49,Critical,Cloud CASB & DLP,Credential Access,"Asset 'production_aws_deploy.env' [Private] Security Findings: Public Internet Exposure (1), AWS Access Key (1), AWS Secret Key (1), GitHub Personal Access Token (1), OpenAI / Anthropic API Key (1), Database Connection URI (1)"
+cloud_file_fin_01,2026-10-28 23:22:49,Critical,Cloud CASB & DLP,Credential Access,"Asset 'q3_corporate_card_transactions.csv' [Private] Security Findings: Public Internet Exposure (1), Credit Card (1)"
+cloud_file_fin_02,2026-10-28 23:22:49,Critical,Cloud CASB & DLP,Initial Access,"Asset 'invoice_auto_processor.vbs' [Private] Security Findings: External Domain Share (1), Executable Script / Macro Dropper (1), Malicious Phishing / C2 Link (1)"
+cloud_file_eng_03,2026-10-28 23:22:49,Safe,Cloud CASB & DLP,Initial Access,Asset 'system_architecture_whitepaper.md' [Private] Security Findings: Clean (No Violations)
+cloud_fldr_pub,2026-10-28 23:22:49,Safe,Cloud CASB & DLP,Initial Access,Asset '📁 Public Marketing Assets' [Private] Security Findings: Clean (No Violations)
+cloud_fldr_hr,2026-10-28 23:22:49,Safe,Cloud CASB & DLP,Initial Access,Asset '📁 Employee KYC & Payroll' [Private] Security Findings: Clean (No Violations)
+cloud_fldr_eng,2026-10-28 23:22:49,Safe,Cloud CASB & DLP,Initial Access,Asset '📁 Cloud Infrastructure & DevOps' [Private] Security Findings: Clean (No Violations)
+cloud_fldr_fin,2026-10-28 23:22:49,Safe,Cloud CASB & DLP,Initial Access,Asset '📁 Finance & Treasury' [Private] Security Findings: Clean (No Violations)
+cloud_root,2026-10-28 23:22:49,Safe,Cloud CASB & DLP,Initial Access,Asset 'My Drive' [Private] Security Findings: Clean (No Violations)

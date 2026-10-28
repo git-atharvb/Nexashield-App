@@ -89,6 +89,70 @@ class DatabaseManager:
             )
         """)
         
+        # NIDS Intrusion Events & Blocked IPs
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS nids_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                src_ip TEXT,
+                dst_ip TEXT,
+                protocol TEXT,
+                length INTEGER,
+                risk_level TEXT,
+                info TEXT,
+                rule_id TEXT,
+                mitre_attack TEXT,
+                details_json TEXT
+            )
+        """)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS nids_blocked_ips (
+                ip TEXT PRIMARY KEY,
+                reason TEXT,
+                timestamp TEXT,
+                blocked_by TEXT DEFAULT 'IPS',
+                status TEXT DEFAULT 'Blocked'
+            )
+        """)
+        
+        # Cloud Security (CASB & CSPM) Tables
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cloud_scans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                total_files INTEGER DEFAULT 0,
+                exposed_count INTEGER DEFAULT 0,
+                dlp_count INTEGER DEFAULT 0,
+                malware_count INTEGER DEFAULT 0,
+                security_score REAL DEFAULT 100.0
+            )
+        """)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cloud_assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id TEXT UNIQUE,
+                name TEXT NOT NULL,
+                mime_type TEXT,
+                size TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                score INTEGER DEFAULT 0,
+                findings_summary TEXT,
+                raw_findings_json TEXT,
+                timestamp TEXT
+            )
+        """)
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cloud_vaulted_assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_name TEXT NOT NULL,
+                file_id TEXT,
+                vault_path TEXT,
+                timestamp TEXT,
+                reason TEXT
+            )
+        """)
+        
         # Seed EICAR Test Signature (Standard Anti-Malware Test File)
         eicar_hash = "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f"
         self.cursor.execute("INSERT OR IGNORE INTO signatures VALUES (?, ?, ?, ?)", 
@@ -201,6 +265,30 @@ class DatabaseManager:
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.cursor.execute("INSERT INTO siem_events (timestamp, source, description, severity) VALUES (?, ?, ?, ?)",
                             (timestamp, source, description, severity))
+        self.conn.commit()
+
+    def get_siem_events(self, limit: int = 500, severity: str = None, search: str = "") -> list[dict]:
+        """Retrieves ordered list of SIEM events with optional filtering."""
+        query = "SELECT id, timestamp, source, description, severity FROM siem_events WHERE 1=1"
+        params = []
+        if severity and severity != "All Severities":
+            query += " AND severity = ?"
+            params.append(severity)
+        if search:
+            query += " AND (source LIKE ? OR description LIKE ?)"
+            term = f"%{search}%"
+            params.extend([term, term])
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+
+        self.cursor.execute(query, tuple(params))
+        rows = self.cursor.fetchall()
+        cols = ["id", "timestamp", "source", "description", "severity"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def clear_siem_events(self):
+        """Clears all logged SIEM events."""
+        self.cursor.execute("DELETE FROM siem_events")
         self.conn.commit()
 
     def get_api_key(self, service="openrouter"):
@@ -418,3 +506,212 @@ class DatabaseManager:
         rows = self.cursor.fetchall()
         cols = ["id", "url", "normalized_url", "final_url", "threat_level", "score", "heuristic_score", "ml_score", "method", "timestamp", "scan_duration", "domain", "resolved_ip"]
         return [dict(zip(cols, r)) for r in rows]
+
+    # ==========================================================
+    # NIDS & IPS Database Operations
+    # ==========================================================
+    def add_nids_event(self, event: dict) -> int:
+        """Stores a captured packet or intrusion event in the database."""
+        import json
+        details_str = json.dumps(event.get("details", {}))
+        self.cursor.execute("""
+            INSERT INTO nids_events (timestamp, src_ip, dst_ip, protocol, length, risk_level, info, rule_id, mitre_attack, details_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            event.get("timestamp", ""),
+            event.get("src_ip", "Unknown"),
+            event.get("dst_ip", "Unknown"),
+            event.get("protocol", "Other"),
+            int(event.get("length", 0)),
+            event.get("risk_level", "Safe"),
+            event.get("info", ""),
+            event.get("rule_id", ""),
+            event.get("mitre_attack", ""),
+            details_str
+        ))
+        self.conn.commit()
+        return self.cursor.lastrowid
+
+    def get_nids_events(self, limit: int = 500, protocol: str = None, risk_level: str = None, search: str = "") -> list[dict]:
+        """Fetches stored NIDS events with optional filtering."""
+        import json
+        sql = "SELECT id, timestamp, src_ip, dst_ip, protocol, length, risk_level, info, rule_id, mitre_attack, details_json FROM nids_events WHERE 1=1"
+        params = []
+        if protocol and protocol not in ("All Protocols", "All"):
+            sql += " AND protocol = ?"
+            params.append(protocol)
+        if risk_level and risk_level not in ("All Risk Levels", "All"):
+            sql += " AND risk_level = ?"
+            params.append(risk_level)
+        if search:
+            sql += " AND (src_ip LIKE ? OR dst_ip LIKE ? OR info LIKE ?)"
+            pat = f"%{search.strip()}%"
+            params.extend([pat, pat, pat])
+
+        sql += f" ORDER BY id DESC LIMIT {int(limit)}"
+        self.cursor.execute(sql, params)
+        rows = self.cursor.fetchall()
+        results = []
+        for r in rows:
+            details = {}
+            try:
+                if r[10]:
+                    details = json.loads(r[10])
+            except Exception:
+                pass
+            results.append({
+                "id": r[0],
+                "timestamp": r[1],
+                "src_ip": r[2],
+                "dst_ip": r[3],
+                "protocol": r[4],
+                "length": r[5],
+                "risk_level": r[6],
+                "info": r[7],
+                "rule_id": r[8],
+                "mitre_attack": r[9],
+                "details": details
+            })
+        return results
+
+    def clear_nids_events(self):
+        """Clears all packet logs from the database."""
+        self.cursor.execute("DELETE FROM nids_events")
+        self.conn.commit()
+
+    def delete_nids_events(self, event_ids: list[int]):
+        """Deletes selected packet events by ID."""
+        if not event_ids:
+            return
+        placeholders = ",".join("?" for _ in event_ids)
+        self.cursor.execute(f"DELETE FROM nids_events WHERE id IN ({placeholders})", event_ids)
+        self.conn.commit()
+
+    def add_nids_blocked_ip(self, ip: str, reason: str, timestamp: str = None, blocked_by: str = "IPS"):
+        """Records an OS firewall blocked IP in the database."""
+        import datetime
+        ts = timestamp or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.cursor.execute("""
+            INSERT OR REPLACE INTO nids_blocked_ips (ip, reason, timestamp, blocked_by, status)
+            VALUES (?, ?, ?, ?, 'Blocked')
+        """, (ip, reason, ts, blocked_by))
+        self.conn.commit()
+
+    def remove_nids_blocked_ip(self, ip: str):
+        """Removes a blocked IP record upon unblocking."""
+        self.cursor.execute("DELETE FROM nids_blocked_ips WHERE ip = ?", (ip,))
+        self.conn.commit()
+
+    def get_nids_blocked_ips(self) -> list[dict]:
+        """Returns all currently registered blocked IPs."""
+        self.cursor.execute("SELECT ip, reason, timestamp, blocked_by, status FROM nids_blocked_ips ORDER BY timestamp DESC")
+        rows = self.cursor.fetchall()
+        cols = ["ip", "reason", "timestamp", "blocked_by", "status"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def is_ip_blocked(self, ip: str) -> bool:
+        """Checks if an IP is in the blocked database."""
+        self.cursor.execute("SELECT 1 FROM nids_blocked_ips WHERE ip = ?", (ip,))
+        return self.cursor.fetchone() is not None
+
+    # ==========================================================
+    # Cloud Security (CASB & CSPM) Database Operations
+    # ==========================================================
+    def save_cloud_scan(self, total: int, exposed: int, dlp: int, malware: int, score: float) -> int:
+        """Records an overall Cloud CASB scan summary."""
+        import datetime
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.cursor.execute("""
+            INSERT INTO cloud_scans (timestamp, total_files, exposed_count, dlp_count, malware_count, security_score)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (ts, total, exposed, dlp, malware, score))
+        self.conn.commit()
+        return self.cursor.lastrowid
+
+    def save_cloud_assets(self, assets: list[dict]):
+        """Persists or updates scanned cloud assets."""
+        import json
+        import datetime
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for a in assets:
+            raw_json = json.dumps(a.get("raw_findings", []))
+            is_pub = 1 if "Public" in str(a.get("findings", "")) else 0
+            self.cursor.execute("""
+                INSERT OR REPLACE INTO cloud_assets (file_id, name, mime_type, size, is_public, status, score, findings_summary, raw_findings_json, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                a.get("id", ""),
+                a.get("name", "Unknown"),
+                a.get("mimeType", ""),
+                str(a.get("size", "N/A")),
+                is_pub,
+                a.get("status", "clean"),
+                a.get("score", 0),
+                a.get("findings", ""),
+                raw_json,
+                ts
+            ))
+        self.conn.commit()
+
+    def get_cloud_assets(self, search: str = "", status: str = "All", limit: int = 200) -> list[dict]:
+        """Retrieves cached cloud asset findings from database."""
+        import json
+        sql = "SELECT id, file_id, name, mime_type, size, is_public, status, score, findings_summary, raw_findings_json, timestamp FROM cloud_assets WHERE 1=1"
+        params = []
+        if search:
+            sql += " AND (name LIKE ? OR findings_summary LIKE ?)"
+            pat = f"%{search.strip()}%"
+            params.extend([pat, pat])
+        if status and status != "All":
+            sql += " AND status = ?"
+            params.append(status.lower())
+
+        sql += f" ORDER BY score DESC, id DESC LIMIT {int(limit)}"
+        self.cursor.execute(sql, params)
+        rows = self.cursor.fetchall()
+        results = []
+        for r in rows:
+            raw = []
+            try:
+                if r[9]:
+                    raw = json.loads(r[9])
+            except Exception:
+                pass
+            results.append({
+                "id": r[1],
+                "name": r[2],
+                "mimeType": r[3],
+                "size": r[4],
+                "is_public": bool(r[5]),
+                "status": r[6],
+                "score": r[7],
+                "findings": r[8],
+                "raw_findings": raw,
+                "timestamp": r[10]
+            })
+        return results
+
+    def save_cloud_vaulted_asset(self, file_name: str, file_id: str, vault_path: str, reason: str = "Quarantined Threat"):
+        """Records a quarantined cloud file saved in local vault."""
+        import datetime
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.cursor.execute("""
+            INSERT INTO cloud_vaulted_assets (file_name, file_id, vault_path, timestamp, reason)
+            VALUES (?, ?, ?, ?, ?)
+        """, (file_name, file_id, vault_path, ts, reason))
+        self.conn.commit()
+
+    def get_cloud_vaulted_assets(self) -> list[dict]:
+        """Returns all quarantined and vaulted cloud assets."""
+        self.cursor.execute("SELECT id, file_name, file_id, vault_path, timestamp, reason FROM cloud_vaulted_assets ORDER BY id DESC")
+        rows = self.cursor.fetchall()
+        cols = ["id", "file_name", "file_id", "vault_path", "timestamp", "reason"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    def clear_cloud_data(self):
+        """Clears cached cloud assets and scans."""
+        self.cursor.execute("DELETE FROM cloud_assets")
+        self.cursor.execute("DELETE FROM cloud_scans")
+        self.conn.commit()
+
+

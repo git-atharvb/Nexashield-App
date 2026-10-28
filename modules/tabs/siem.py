@@ -66,13 +66,21 @@ class SIEMDashboard(QWidget):
         self.content_area = QStackedWidget()
         
         # Add sub-modules
-        self.content_area.addWidget(OverviewWidget(self.session))
-        self.content_area.addWidget(FilesWidget(self.session))
-        self.content_area.addWidget(SettingsWidget())
-        self.content_area.addWidget(AboutWidget())
-        self.content_area.addWidget(HelpWidget())
-        self.content_area.addWidget(ContactWidget())
-        self.content_area.addWidget(AiChatWidget(self.session))
+        self.overview_widget = OverviewWidget(self.session, siem_dashboard=self)
+        self.files_widget = FilesWidget(self.session)
+        self.settings_widget = SettingsWidget()
+        self.about_widget = AboutWidget()
+        self.help_widget = HelpWidget()
+        self.contact_widget = ContactWidget()
+        self.ai_chat_widget = AiChatWidget(self.session)
+
+        self.content_area.addWidget(self.overview_widget)
+        self.content_area.addWidget(self.files_widget)
+        self.content_area.addWidget(self.settings_widget)
+        self.content_area.addWidget(self.about_widget)
+        self.content_area.addWidget(self.help_widget)
+        self.content_area.addWidget(self.contact_widget)
+        self.content_area.addWidget(self.ai_chat_widget)
 
         # Add to main layout
         main_layout.addWidget(self.sidebar)
@@ -85,3 +93,9 @@ class SIEMDashboard(QWidget):
         self.content_area.setCurrentIndex(index)
         for i, btn in enumerate(self.menu_buttons):
             btn.setChecked(i == index)
+        # If switching to Files subtab, trigger a fresh reload of files table
+        if index == 1 and hasattr(self, 'files_widget') and self.files_widget:
+            try:
+                self.files_widget.load_files()
+            except Exception:
+                pass

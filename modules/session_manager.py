@@ -18,8 +18,13 @@ class SessionManager:
         self.app_data_dir = os.path.join(os.path.expanduser("~"), "AppData", "Local", "NexaShield")
         self.workspace_dir = os.path.join(self.app_data_dir, "workspaces", safe_folder)
         
-        # Ensure the tenant's workspace exists
-        os.makedirs(self.workspace_dir, exist_ok=True)
+        # Ensure the tenant's workspace exists with graceful workspace directory fallback
+        try:
+            os.makedirs(self.workspace_dir, exist_ok=True)
+        except Exception:
+            self.app_data_dir = os.path.join(os.getcwd(), ".nexashield_data")
+            self.workspace_dir = os.path.join(self.app_data_dir, "workspaces", safe_folder)
+            os.makedirs(self.workspace_dir, exist_ok=True)
         
         # Initialize User Database
         self._init_user_database()
@@ -118,6 +123,70 @@ class SessionManager:
                 content_analysis TEXT,
                 raw_reasons TEXT,
                 FOREIGN KEY (scan_id) REFERENCES phishing_scans(id) ON DELETE CASCADE
+            )
+        """)
+
+        # Permanent NIDS & IPS Tables
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS nids_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                src_ip TEXT,
+                dst_ip TEXT,
+                protocol TEXT,
+                length INTEGER,
+                risk_level TEXT,
+                info TEXT,
+                rule_id TEXT,
+                mitre_attack TEXT,
+                details_json TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS nids_blocked_ips (
+                ip TEXT PRIMARY KEY,
+                reason TEXT,
+                timestamp TEXT,
+                blocked_by TEXT DEFAULT 'IPS',
+                status TEXT DEFAULT 'Blocked'
+            )
+        """)
+
+        # Cloud Security (CASB & CSPM) Tables
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cloud_scans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                total_files INTEGER DEFAULT 0,
+                exposed_count INTEGER DEFAULT 0,
+                dlp_count INTEGER DEFAULT 0,
+                malware_count INTEGER DEFAULT 0,
+                security_score REAL DEFAULT 100.0
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cloud_assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_id TEXT UNIQUE,
+                name TEXT NOT NULL,
+                mime_type TEXT,
+                size TEXT,
+                is_public INTEGER DEFAULT 0,
+                status TEXT,
+                score INTEGER DEFAULT 0,
+                findings_summary TEXT,
+                raw_findings_json TEXT,
+                timestamp TEXT
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cloud_vaulted_assets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_name TEXT NOT NULL,
+                file_id TEXT,
+                vault_path TEXT,
+                timestamp TEXT,
+                reason TEXT
             )
         """)
         
